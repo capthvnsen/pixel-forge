@@ -477,16 +477,18 @@ static func _apply_terrain_sets(
 					tile_data.set_terrain_peering_bit(_PEERING_BIT_ENUM[peering_name], terrain_idx[to_terrain])
 
 
-## Godot's `TileSetAtlasSource` animation model requires frames to occupy consecutive
-## atlas cells in a single horizontal strip starting at the tile's own coordinates,
-## entirely inside the atlas texture — it has no notion of cycling through arbitrary,
-## already-named tiles scattered around the atlas the way the neutral manifest's
-## `animated_tiles.frames` does (see the forest fixture: `water_flow` cycles between the
-## pre-existing `grass` and `dirt` tiles, which are not laid out that way). When the
-## frames the manifest lists don't form such a strip that fits the atlas, calling
-## Godot's animation setters would either misbehave or throw an engine-level error, so
-## we check feasibility first and skip that tile's animation (leaving it static) with a
-## clear warning instead. See docs/godot.md known limitations.
+## Godot's `TileSetAtlasSource` animation model requires an animated tile's frames to
+## occupy a contiguous horizontal strip of atlas cells starting at the tile's own
+## coordinates, entirely inside the atlas texture, and otherwise empty; calling the
+## animation setters when that doesn't hold either throws an engine-level error (printed
+## straight to the console, not a catchable GDScript error) or leaves the tile in a
+## half-set state. `pixel_forge.exporters.godot.tileset` already guarantees the frames a
+## manifest lists are contiguous (raising `ExportError` at build time otherwise), but
+## this plugin treats every manifest as untrusted input, so it re-checks contiguity,
+## atlas bounds, and strip emptiness itself, before calling into the engine, and reports
+## a hard `outcome.errors` entry (not a warning) when a manifest violates it; a manifest
+## that can't be represented must fail the import, not silently ship without its
+## animation. See docs/godot.md known limitations.
 static func _apply_animated_tiles(
 	ts_data: Dictionary, atlas_source: TileSetAtlasSource, asset_id: String, outcome: Outcome
 ) -> void:
@@ -506,29 +508,21 @@ static func _apply_animated_tiles(
 			continue
 		var first_coords := Vector2i(int(frames[0].get("x", 0)), int(frames[0].get("y", 0)))
 
-		var contiguous := true
-		for i in frames.size():
-			var expected := Vector2i(first_coords.x + i, first_coords.y)
-			var actual := Vector2i(int(frames[i].get("x", 0)), int(frames[i].get("y", 0)))
-			if actual != expected:
-				contiguous = false
-				break
-		var fits: bool = (
-			(first_coords.x + frames.size()) * tile_size.x <= atlas_size.x
-			and (first_coords.y + 1) * tile_size.y <= atlas_size.y
+		var problem := _animated_tile_infeasibility_reason(
+			frames, first_coords, tile_size, atlas_size, atlas_source
 		)
-
-		if not contiguous or not fits:
-			outcome.warnings.append(
+		if not problem.is_empty():
+			outcome.errors.append(
 				(
 					"%s: animated_tiles.%s frames %s cannot be represented as a Godot tile "
-					+ "animation — it requires a contiguous %d-cell horizontal strip starting at "
-					+ "%s that fits inside the %s atlas; the tile was left static"
+					+ "animation (%s); it requires a contiguous %d-cell horizontal strip "
+					+ "starting at %s, empty except for the base tile, inside the %s atlas"
 				)
 				% [
 					asset_id,
 					anim_name,
 					str(frames.map(func(f): return [int(f.get("x", 0)), int(f.get("y", 0))])),
+					problem,
 					frames.size(),
 					str(first_coords),
 					str(atlas_size),
@@ -543,6 +537,57 @@ static func _apply_animated_tiles(
 		var duration_sec := float(anim_data.get("frame_duration_ms", 200)) / 1000.0
 		for i in frames.size():
 			atlas_source.set_tile_animation_frame_duration(first_coords, i, duration_sec)
+
+		# Read the frame count back: if the engine rejected the call above for a reason
+		# this pre-check didn't anticipate, it fails silently from GDScript's point of
+		# view (only a raw console ERROR:, no catchable exception). This is what turns
+		# that into a build failure instead of a tileset that's quietly missing its
+		# animation.
+		var applied_count := atlas_source.get_tile_animation_frames_count(first_coords)
+		if applied_count != frames.size():
+			outcome.errors.append(
+				(
+					"%s: animated_tiles.%s: the engine reports %d animation frame(s) for the "
+					+ "tile at %s after import, expected %d; the generated tileset does not "
+					+ "carry the animation"
+				)
+				% [asset_id, anim_name, applied_count, str(first_coords), frames.size()]
+			)
+
+
+## Empty string when `frames` (one animated tile's manifest frame list, already known
+## non-empty) can be safely applied to `atlas_source`; a short human-readable reason
+## otherwise. Three checks, in order: contiguous horizontal strip starting at
+## `first_coords`; strip fits inside `atlas_size`; every non-base cell in the strip is
+## not already a registered tile (Godot refuses to resize an occupied strip, and only
+## reports that as a raw engine error, never a catchable one, so it must be caught here
+## instead).
+static func _animated_tile_infeasibility_reason(
+	frames: Array,
+	first_coords: Vector2i,
+	tile_size: Vector2i,
+	atlas_size: Vector2i,
+	atlas_source: TileSetAtlasSource,
+) -> String:
+	for i in frames.size():
+		var expected := Vector2i(first_coords.x + i, first_coords.y)
+		var actual := Vector2i(int(frames[i].get("x", 0)), int(frames[i].get("y", 0)))
+		if actual != expected:
+			return "not a contiguous horizontal strip"
+
+	var fits: bool = (
+		(first_coords.x + frames.size()) * tile_size.x <= atlas_size.x
+		and (first_coords.y + 1) * tile_size.y <= atlas_size.y
+	)
+	if not fits:
+		return "does not fit inside the atlas"
+
+	for i in range(1, frames.size()):
+		var strip_coords := Vector2i(first_coords.x + i, first_coords.y)
+		if atlas_source.has_tile(strip_coords):
+			return "cell %s in the strip is already occupied by another tile" % str(strip_coords)
+
+	return ""
 
 
 ## Demo `TileMapLayer` scene built straight from `sample_map`, one layer node per key.

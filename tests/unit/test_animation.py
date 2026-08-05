@@ -147,25 +147,25 @@ def test_mirrored_direction_matches_source() -> None:
 
 def test_self_mirror_raises() -> None:
     doc = _doc(directions=["south", "east"], mirror={"east": "east"})
-    with pytest.raises(ForgeError):
+    with pytest.raises(ForgeError, match="cannot map to itself"):
         resolve_frames(doc)
 
 
 def test_unknown_mirror_source_raises() -> None:
     doc = _doc(directions=["south", "west"], mirror={"west": "east"})
-    with pytest.raises(ForgeError):
+    with pytest.raises(ForgeError, match="mirror source direction"):
         resolve_frames(doc)
 
 
 def test_two_hop_mirror_chain_raises() -> None:
     doc = _doc(directions=["north", "west", "east"], mirror={"east": "west", "west": "north"})
-    with pytest.raises(ForgeError):
+    with pytest.raises(ForgeError, match="mirror chain too long"):
         resolve_frames(doc)
 
 
 def test_mirror_of_undeclared_direction_raises() -> None:
     doc = _doc(directions=["south", "east"], mirror={"west": "east"})
-    with pytest.raises(ForgeError):
+    with pytest.raises(ForgeError, match="mirror target direction"):
         resolve_frames(doc)
 
 

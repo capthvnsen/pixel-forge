@@ -78,6 +78,11 @@ def _terrain_doc() -> Any:
                     "collision": "solid",
                     "navigation": True,
                 },
+                # Dedicated animation-only frames, distinct from grass/dirt -- an
+                # animated tile's frames must not double as independently terrain-bearing
+                # tiles, since only the base frame survives as its own `tiles` entry.
+                "water_1": {"size": [8, 8], "regions": {}, "anchors": {}},
+                "water_2": {"size": [8, 8], "regions": {}, "anchors": {}},
             },
             "terrain_sets": {"ground": {"mode": "corners_and_edges", "tiles": ["grass", "dirt"]}},
             "transitions": [
@@ -85,11 +90,17 @@ def _terrain_doc() -> Any:
                 for mask in ("N", "NE", "E", "SW")
             ],
             "animated_tiles": {
-                "water_flow": {"frames": ["grass", "dirt"], "frame_duration_ms": 150, "loop": True}
+                "water_flow": {
+                    "frames": ["water_1", "water_2"],
+                    "frame_duration_ms": 150,
+                    "loop": True,
+                }
             },
             "sample_map": {
                 "size": [2, 2],
-                "layers": {"ground": [["grass", "dirt"], ["dirt", "grass"]]},
+                # "water_2" (a non-base animation frame) exercises resolution to the
+                # base frame's coords -- see test_sample_map_coords_resolved.
+                "layers": {"ground": [["grass", "dirt"], ["dirt", "water_2"]]},
             },
             "export": {},
             "validation": {},
@@ -168,8 +179,9 @@ def test_build_tileset_atlas_coords_and_terrain_transitions() -> None:
     cells = _terrain_atlas(doc)
     tileset = build_tileset(doc, cells, "forest/atlas.png")
 
+    # "water_2" (the animation's non-base frame) does not get its own tiles entry.
     coords = {t.tile_id: (t.x, t.y) for t in tileset.tiles}
-    assert coords == {"dirt": (0, 0), "grass": (1, 0)}
+    assert coords == {"dirt": (0, 0), "grass": (1, 0), "water_1": (2, 0)}
     assert tileset.tile_size == (8, 8)
     assert tileset.collision_tiles == ["dirt"]
     assert tileset.navigation_tiles == ["dirt"]
@@ -231,14 +243,43 @@ def test_animated_tile_frame_coords_resolved() -> None:
     tileset = build_tileset(doc, cells, "forest/atlas.png")
 
     water = tileset.animated_tiles["water_flow"]
-    assert [(f.tile_id, f.x, f.y) for f in water.frames] == [("grass", 1, 0), ("dirt", 0, 0)]
+    assert [(f.tile_id, f.x, f.y) for f in water.frames] == [("water_1", 2, 0), ("water_2", 3, 0)]
     assert water.frame_duration_ms == 150
     assert water.loop is True
 
 
+def test_animated_tile_appears_exactly_once_in_tiles() -> None:
+    doc = _terrain_doc()
+    cells = _terrain_atlas(doc)
+    tileset = build_tileset(doc, cells, "forest/atlas.png")
+
+    tile_ids = [t.tile_id for t in tileset.tiles]
+    assert tile_ids.count("water_1") == 1
+    assert "water_2" not in tile_ids
+
+
+def test_animated_tile_non_contiguous_frames_raise() -> None:
+    doc = _terrain_doc()
+    cells = dict(_terrain_atlas(doc))
+    # Move "water_2" two cells further right so it's no longer adjacent to the base
+    # frame "water_1" -- the exact bug this whole feature exists to catch.
+    base = cells["water_2"]
+    cells["water_2"] = SheetCell(
+        direction=base.direction,
+        animation=base.animation,
+        index=base.index,
+        x=base.x + base.w * 2,
+        y=base.y,
+        w=base.w,
+        h=base.h,
+    )
+    with pytest.raises(ExportError, match="water_flow"):
+        build_tileset(doc, cells, "forest/atlas.png")
+
+
 def test_animated_tile_unknown_frame_tile_raises() -> None:
     doc = _terrain_doc()
-    cells = {"grass": _terrain_atlas(doc)["grass"]}  # drop "dirt" -> unknown frame reference
+    cells = {k: v for k, v in _terrain_atlas(doc).items() if k != "water_2"}  # unknown frame ref
     with pytest.raises(ExportError):
         build_tileset(doc, cells, "forest/atlas.png")
 
@@ -253,7 +294,9 @@ def test_sample_map_coords_resolved() -> None:
 
     assert tileset.sample_map is not None
     assert tileset.sample_map.size == (2, 2)
-    assert tileset.sample_map.layers["ground"] == [[(1, 0), (0, 0)], [(0, 0), (1, 0)]]
+    # Cell [1][1] names "water_2", the animation's non-base frame -- it must resolve to
+    # "water_1"'s coords (2, 0), the only coordinate Godot knows as a real tile.
+    assert tileset.sample_map.layers["ground"] == [[(1, 0), (0, 0)], [(0, 0), (2, 0)]]
 
 
 def test_sample_map_unknown_tile_raises() -> None:

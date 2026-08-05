@@ -9,11 +9,21 @@ restricted to mirror-safe regions, then flips the whole canvas with `Canvas.mirr
 Flipping the finished raster is exactly equivalent to mirroring every mirror-safe
 shape's coordinates individually: `domain.geometry.mirror_point_x` (`x' = canvas_width
 - 1 - x`) is `Canvas.mirror_x`'s exact inverse for both even and odd widths (see that
-module's docstring), so there is no need to re-derive mirrored anchors here. Regions
-with `mirror_safe = False` are excluded from that flip and instead composited on top,
-unmirrored, at their own positions using the *destination* direction's own transforms
-(`frame.transforms`, which `animation.resolve_frames` already resolves to prefer that
-direction's own `direction_overrides` when present).
+module's docstring), so there is no need to re-derive mirrored anchors for those
+regions.
+
+Regions with `mirror_safe = False` are excluded from that flip and instead composited
+on top, drawn unflipped but *attached to the mirrored body*: their origin uses
+`domain.geometry.mirror_anchors` (each anchor's x mirrored about the canvas centre),
+not the raw, unmirrored anchor — otherwise a hand/insignia/etc. anchored on the source
+side stays frozen on the wrong side once the body flips under it. Their per-region
+transform is `frame.mirror_unsafe_transforms`, not `frame.transforms`:
+`animation.resolve_frames` computes it separately so a `direction_overrides` entry
+*inherited* from the mirror source (no override authored for this direction) has its
+offset's x component negated, while one *authored* explicitly for this direction is
+used exactly as written — the author was describing this direction, not the source.
+A frame-level (animation) transform is never mirrored either way: direction-specific
+motion is deliberately not carried over onto an unsafe region.
 
 Everything clips to `doc.asset.canvas` for free via `Canvas.set_pixel`'s out-of-bounds
 no-op; an off-canvas region is never an error.
@@ -22,6 +32,7 @@ no-op; an off-canvas region is never an error.
 from __future__ import annotations
 
 from pixel_forge.animation.resolver import ResolvedFrame, frames_for, resolve_frames
+from pixel_forge.domain.geometry import mirror_anchors
 from pixel_forge.domain.palette import ResolvedPalette, resolve_palette
 from pixel_forge.errors import ForgeError
 from pixel_forge.rendering.backend import RenderBackend, TileRenderBackend
@@ -56,7 +67,10 @@ class LocalRenderBackend:
         if not unsafe_regions:
             return mirrored
 
-        unsafe_layers = plan_layers(doc, unsafe_regions, doc.anchors, frame.transforms, palette)
+        unsafe_anchors = mirror_anchors(doc.anchors, doc.asset.canvas[0])
+        unsafe_layers = plan_layers(
+            doc, unsafe_regions, unsafe_anchors, frame.mirror_unsafe_transforms, palette
+        )
         unsafe_canvas = composite(doc.asset.canvas, unsafe_layers, palette)
 
         result = mirrored.copy()

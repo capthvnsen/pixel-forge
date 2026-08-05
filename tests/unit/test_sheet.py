@@ -141,13 +141,18 @@ def test_build_contact_sheet_produces_opaque_canvas() -> None:
 
 
 def test_build_contact_sheet_scale_doubles_cell_footprint() -> None:
-    frames = [(FakeFrame("up", "idle", 0), _solid(2, 2, RED))]
-    sheet = build_sprite_sheet(frames, (2, 2))
+    cw, ch = 2, 2
+    frames = [(FakeFrame("up", "idle", 0), _solid(cw, ch, RED))]
+    sheet = build_sprite_sheet(frames, (cw, ch))
     contact_1x = build_contact_sheet(sheet, scale=1)
     contact_2x = build_contact_sheet(sheet, scale=2)
-    # Larger scale must produce a strictly larger canvas (cell footprint doubled).
-    assert contact_2x.width > contact_1x.width
-    assert contact_2x.height > contact_1x.height
+    # Strip off the fixed label gutter and 1px grid border (neither scales) to isolate
+    # the per-cell content footprint, and assert it actually doubles, not just grows.
+    gutter = text_width("idle/up") + 4
+    fixed_w = gutter + 1 + sheet.columns
+    fixed_h = 1 + sheet.rows
+    assert contact_2x.width - fixed_w == 2 * (contact_1x.width - fixed_w)
+    assert contact_2x.height - fixed_h == 2 * (contact_1x.height - fixed_h)
 
 
 # --- build_atlas -----------------------------------------------------------------------------
@@ -174,6 +179,36 @@ def test_build_atlas_uniform_size_enforced() -> None:
 def test_build_atlas_empty_raises() -> None:
     with pytest.raises(ForgeError):
         build_atlas({})
+
+
+def test_build_atlas_explicit_rows_exact_cell_coordinates() -> None:
+    images = {k: _solid(2, 2, RED) for k in ("a", "b", "c", "d", "e")}
+    # Row 0 is short (2 of a possible 3 columns) -- the third cell is padding.
+    atlas, cells = build_atlas(images, rows=[["a", "b"], ["c", "d", "e"]])
+
+    assert atlas.width == 6  # 3 columns (widest row) * 2px
+    assert atlas.height == 4  # 2 rows * 2px
+    assert {(cell.x, cell.y) for cell in cells.values()} == {
+        (0, 0),
+        (2, 0),
+        (0, 2),
+        (2, 2),
+        (4, 2),
+    }
+    assert cells["a"] == SheetCell(direction="a", animation="a", index=0, x=0, y=0, w=2, h=2)
+    assert cells["e"] == SheetCell(direction="e", animation="e", index=0, x=4, y=2, w=2, h=2)
+
+
+def test_build_atlas_explicit_rows_missing_id_raises() -> None:
+    images = {"a": _solid(2, 2, RED), "b": _solid(2, 2, BLUE)}
+    with pytest.raises(ForgeError):
+        build_atlas(images, rows=[["a"]])  # "b" never placed
+
+
+def test_build_atlas_explicit_rows_unknown_id_raises() -> None:
+    images = {"a": _solid(2, 2, RED)}
+    with pytest.raises(ForgeError):
+        build_atlas(images, rows=[["a", "ghost"]])  # "ghost" not in images
 
 
 # --- check_seams / build_seam_map -------------------------------------------------------------

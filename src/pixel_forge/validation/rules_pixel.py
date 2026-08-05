@@ -9,7 +9,7 @@ from __future__ import annotations
 import numpy as np
 from numpy.typing import NDArray
 
-from pixel_forge.domain.palette import ResolvedPalette, rgba_to_hex
+from pixel_forge.domain.palette import ResolvedPalette, hex_to_rgba, rgba_to_hex
 from pixel_forge.domain.palette import check_palette_limit as _check_palette_limit
 from pixel_forge.rendering.canvas import RGBA, Canvas
 from pixel_forge.schemas import Finding
@@ -20,6 +20,33 @@ _SPRITE_TYPES = ("character", "enemy", "prop")
 
 def _non_palette_colors(canvas: Canvas, palette: ResolvedPalette) -> list[RGBA]:
     return sorted(c for c in canvas.colors() if not palette.contains_rgba(c))
+
+
+def _on_segment(
+    point: tuple[int, int, int], a: tuple[int, int, int], b: tuple[int, int, int]
+) -> bool:
+    """True if `point` is (on rounding) the nearest point on segment `a`-`b` in RGB space."""
+    dx, dy, dz = b[0] - a[0], b[1] - a[1], b[2] - a[2]
+    d2 = dx * dx + dy * dy + dz * dz
+    if d2 == 0:
+        return False
+    px, py, pz = point[0] - a[0], point[1] - a[1], point[2] - a[2]
+    t = (px * dx + py * dy + pz * dz) / d2
+    if t < 0.0 or t > 1.0:
+        return False
+    nearest = (round(a[0] + t * dx), round(a[1] + t * dy), round(a[2] + t * dz))
+    return nearest == point
+
+
+def _is_palette_blend(rgba: RGBA, palette: ResolvedPalette) -> bool:
+    """True if `rgba`'s RGB lies on (or within rounding of) the segment between two
+    distinct palette colours — the exact signature an antialiasing/dithering blend
+    leaves; a colour that is off-palette but not on any such segment is simply wrong,
+    not a blend artifact."""
+    point = (rgba[0], rgba[1], rgba[2])
+    colors = [hex_to_rgba(c.hex) for c in palette.palette.colors]
+    triples = [(r, g, b) for r, g, b, _a in colors]
+    return any(_on_segment(point, a, b) for i, a in enumerate(triples) for b in triples[i + 1 :])
 
 
 @register(
@@ -109,8 +136,10 @@ def _pix002(ctx: RuleContext) -> list[Finding]:
     kind="deterministic",
     applies_to=_SPRITE_TYPES,
     description=(
-        "A non-transparent colour not present in the palette is exactly how an "
-        "AA/blend artifact shows up. Skipped when doc.validation.allow_antialiasing."
+        "A non-palette colour that lies on (or within rounding of) the segment between "
+        "two palette colours in RGB space — the exact signature an antialiasing/blend "
+        "artifact leaves. Skipped when doc.validation.allow_antialiasing. A non-palette "
+        "colour that is not a blend of two palette colours is PIX004's concern instead."
     ),
 )
 def _pix003(ctx: RuleContext) -> list[Finding]:
@@ -121,6 +150,8 @@ def _pix003(ctx: RuleContext) -> list[Finding]:
         animation, direction, index = key
         canvas = ctx.frames[key]
         for rgba in _non_palette_colors(canvas, ctx.palette):
+            if not _is_palette_blend(rgba, ctx.palette):
+                continue
             findings.append(
                 make_finding(
                     ctx,
@@ -131,8 +162,8 @@ def _pix003(ctx: RuleContext) -> list[Finding]:
                     direction=direction,
                     frame=index,
                     message=(
-                        f"colour {rgba_to_hex(rgba)} is not in the palette; this is the "
-                        "signature of an antialiasing/blend artifact"
+                        f"colour {rgba_to_hex(rgba)} is a blend of two palette colours; this is "
+                        "the signature of an antialiasing artifact"
                     ),
                     remediation=(
                         "re-render with nearest-neighbour only, or set "
@@ -149,7 +180,10 @@ def _pix003(ctx: RuleContext) -> list[Finding]:
     severity="error",
     kind="deterministic",
     applies_to=_SPRITE_TYPES,
-    description="A colour used in a frame must be an approved palette colour.",
+    description=(
+        "A colour used in a frame must be an approved palette colour or a blend of two "
+        "(PIX003's concern). Never waivable — not gated by allow_antialiasing."
+    ),
 )
 def _pix004(ctx: RuleContext) -> list[Finding]:
     findings = []
@@ -157,6 +191,8 @@ def _pix004(ctx: RuleContext) -> list[Finding]:
         animation, direction, index = key
         canvas = ctx.frames[key]
         for rgba in _non_palette_colors(canvas, ctx.palette):
+            if _is_palette_blend(rgba, ctx.palette):
+                continue
             findings.append(
                 make_finding(
                     ctx,

@@ -319,6 +319,73 @@ def test_check_protection_unknown_name_raises():
         check_protection(doc, doc, ["not_a_real_anchor_or_region"])
 
 
+# --- replace_spec -------------------------------------------------------------------------
+
+
+def test_replace_spec_round_trip():
+    doc = make_doc()
+    new_spec = doc.model_dump(mode="json")
+    new_spec["directions"] = ["down", "up", "left"]
+    op = OperationSpec(name="replace_spec", params={"spec": new_spec})
+    new_doc, inverse = apply_operation(doc, op)
+    assert new_doc.directions == ["down", "up", "left"]
+    restored, _ = apply_operation(new_doc, inverse)
+    assert content_hash(restored) == content_hash(doc)
+
+
+def test_replace_spec_rejects_asset_id_change():
+    doc = make_doc()
+    new_spec = doc.model_dump(mode="json")
+    new_spec["asset"]["id"] = "villain"
+    op = OperationSpec(name="replace_spec", params={"spec": new_spec})
+    with pytest.raises(OperationError):
+        apply_operation(doc, op)
+
+
+def test_replace_spec_rejects_protected_region_change():
+    doc = make_doc()
+    new_spec = doc.model_dump(mode="json")
+    new_spec["regions"]["shield"]["shapes"][0]["size"] = [10, 10]
+    op = OperationSpec(name="replace_spec", params={"spec": new_spec})
+    with pytest.raises(OperationError):
+        apply_operation(doc, op)
+
+
+def test_replace_spec_honours_op_protect():
+    doc = make_doc()
+    new_spec = doc.model_dump(mode="json")
+    new_spec["regions"]["body"]["shapes"][0]["size"] = [20, 20]
+    op = OperationSpec(name="replace_spec", params={"spec": new_spec}, protect=["body"])
+    with pytest.raises(OperationError):
+        apply_operation(doc, op)
+
+
+def test_replace_spec_rejects_invalid_schema():
+    doc = make_doc()
+    new_spec = doc.model_dump(mode="json")
+    del new_spec["palette"]
+    op = OperationSpec(name="replace_spec", params={"spec": new_spec})
+    with pytest.raises(OperationError):
+        apply_operation(doc, op)
+
+
+def test_replace_spec_revision_is_revertible(paths):
+    # Reproduces the bug this operation fixes: a `replace_spec` revision used to
+    # record itself as both operation and inverse without registering a handler for
+    # that name, so `revert_revision` raised `OperationError: unknown operation
+    # 'replace_spec'`.
+    doc = make_doc()
+    new_spec = doc.model_dump(mode="json")
+    new_spec["directions"] = ["down", "up", "left"]
+    op = OperationSpec(name="replace_spec", params={"spec": new_spec})
+    doc1, inv = apply_operation(doc, op)
+    rec = record_revision(
+        paths, "hero", operation=op, inverse=inv, doc_before=doc, doc_after=doc1, timestamp="t1"
+    )
+    reverted_doc, _inverse_of_inverse = revert_revision(paths, "hero", rec.revision_id, doc1)
+    assert content_hash(reverted_doc) == content_hash(doc)
+
+
 # --- unknown operation/region/animation/frame ------------------------------------------
 
 
@@ -354,7 +421,7 @@ def test_unknown_frame_index_raises():
 # --- registry helpers -------------------------------------------------------------------
 
 
-def test_available_operations_lists_all_seven():
+def test_available_operations_lists_all_eight():
     names = {info.name for info in available_operations()}
     assert names == {
         "resize_region",
@@ -364,6 +431,7 @@ def test_available_operations_lists_all_seven():
         "add_frame",
         "remove_frame",
         "set_region_visibility",
+        "replace_spec",
     }
 
 

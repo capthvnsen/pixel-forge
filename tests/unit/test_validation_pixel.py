@@ -14,6 +14,9 @@ BLACK: RGBA = (0, 0, 0, 255)
 BLUE: RGBA = (0, 0, 255, 255)
 WHITE: RGBA = (255, 255, 255, 255)
 OFF_PALETTE: RGBA = (17, 34, 51, 255)
+# Exactly on the RGB segment between the default (red, black) palette: a genuine
+# antialiasing blend, unlike OFF_PALETTE above which lies on no palette segment.
+BLEND_RED_BLACK: RGBA = (128, 0, 0, 255)
 
 
 def _doc(
@@ -116,12 +119,12 @@ def test_pix002_does_not_fire_on_binary_alpha() -> None:
     assert report.findings == []
 
 
-# ---- PIX003: non-palette colour = AA artifact, skippable ------------------------
+# ---- PIX003: palette-blend = AA artifact, skippable ------------------------------
 
 
-def test_pix003_fires_on_off_palette_colour() -> None:
+def test_pix003_fires_on_blend_colour() -> None:
     doc = _doc()
-    canvas = _canvas(8, 8, {(0, 0): OFF_PALETTE})
+    canvas = _canvas(8, 8, {(0, 0): BLEND_RED_BLACK})
     ctx = _ctx(doc, {("idle", "south", 0): canvas})
     report = run_validation(ctx, only=["PIX003"])
     assert len(report.findings) == 1
@@ -131,6 +134,16 @@ def test_pix003_fires_on_off_palette_colour() -> None:
 
 def test_pix003_does_not_fire_when_allow_antialiasing() -> None:
     doc = _doc(validation={"allow_antialiasing": True})
+    canvas = _canvas(8, 8, {(0, 0): BLEND_RED_BLACK})
+    ctx = _ctx(doc, {("idle", "south", 0): canvas})
+    report = run_validation(ctx, only=["PIX003"])
+    assert report.findings == []
+
+
+def test_pix003_does_not_fire_on_non_blend_foreign_colour() -> None:
+    # OFF_PALETTE lies on no segment between two palette colours, so it isn't an AA
+    # artifact by this rule's definition — that's PIX004's job, not PIX003's.
+    doc = _doc()
     canvas = _canvas(8, 8, {(0, 0): OFF_PALETTE})
     ctx = _ctx(doc, {("idle", "south", 0): canvas})
     report = run_validation(ctx, only=["PIX003"])
@@ -153,6 +166,16 @@ def test_pix004_fires_on_unapproved_colour() -> None:
 def test_pix004_does_not_fire_on_palette_only_colours() -> None:
     doc = _doc()
     canvas = _canvas(8, 8, {(0, 0): RED, (1, 1): BLACK})
+    ctx = _ctx(doc, {("idle", "south", 0): canvas})
+    report = run_validation(ctx, only=["PIX004"])
+    assert report.findings == []
+
+
+def test_pix004_does_not_fire_on_blend_colour() -> None:
+    # A genuine blend of two palette colours is PIX003's concern exclusively; PIX004
+    # must not double-report it, with or without allow_antialiasing.
+    doc = _doc()
+    canvas = _canvas(8, 8, {(0, 0): BLEND_RED_BLACK})
     ctx = _ctx(doc, {("idle", "south", 0): canvas})
     report = run_validation(ctx, only=["PIX004"])
     assert report.findings == []

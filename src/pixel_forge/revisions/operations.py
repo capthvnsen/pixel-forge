@@ -27,7 +27,7 @@ from pydantic import ValidationError
 from pixel_forge.animation.resolver import merge_transforms
 from pixel_forge.errors import OperationError
 from pixel_forge.schemas.animation import AnimationSpec, FrameSpec
-from pixel_forge.schemas.asset import AssetDocUnion, SpriteAssetBase
+from pixel_forge.schemas.asset import AssetDocUnion, SpriteAssetBase, TerrainAsset, parse_asset_doc
 from pixel_forge.schemas.common import Region, RegionTransform
 from pixel_forge.schemas.revision import JSONValue, OperationSpec
 
@@ -74,6 +74,12 @@ _OPERATION_INFO: tuple[OperationInfo, ...] = (
         "set_region_visibility",
         "Show or hide a region for specific animation frames or directions.",
         ("region", "visible", "animation", "frames", "directions"),
+    ),
+    OperationInfo(
+        "replace_spec",
+        "Replace the asset's entire spec document; for structural edits the other operations "
+        "don't cover.",
+        ("spec",),
     ),
 )
 
@@ -541,6 +547,57 @@ def _set_region_visibility(
     }
 
 
+def _check_region_dict(before: dict[str, Region], after: dict[str, Region], *, scope: str) -> None:
+    for name, region in before.items():
+        if not region.protected:
+            continue
+        after_region = after.get(name)
+        if after_region is None or after_region.model_dump(mode="json") != region.model_dump(
+            mode="json"
+        ):
+            raise OperationError(f"replace_spec: protected region {scope}{name!r} changed")
+
+
+def _check_protected_regions(before: AssetDocUnion, after: AssetDocUnion) -> None:
+    """Refuse a `replace_spec` that touches any `protected: true` region.
+
+    Mirrors the outright block every other operation applies via
+    `_require_unprotected_region`: a protected region must come through the
+    replacement byte-for-byte, not just with unchanged shapes.
+    """
+    if isinstance(before, SpriteAssetBase) and isinstance(after, SpriteAssetBase):
+        _check_region_dict(before.regions, after.regions, scope="")
+    elif isinstance(before, TerrainAsset) and isinstance(after, TerrainAsset):
+        for tile_id, tile in before.tiles.items():
+            after_tile = after.tiles.get(tile_id)
+            after_regions = after_tile.regions if after_tile is not None else {}
+            _check_region_dict(tile.regions, after_regions, scope=f"tile {tile_id!r} ")
+
+
+def _replace_spec(
+    doc: AssetDocUnion, data: dict[str, Any], op: OperationSpec
+) -> tuple[str, dict[str, JSONValue]]:
+    spec_param = _as_dict(op.params.get("spec"), "spec")
+    try:
+        new_doc = parse_asset_doc(dict(spec_param))
+    except ValidationError as exc:
+        raise OperationError(
+            f"replace_spec: replacement spec failed schema validation: {exc}"
+        ) from exc
+    if new_doc.asset.id != doc.asset.id:
+        raise OperationError(
+            f"replace_spec cannot change asset.id from {doc.asset.id!r} to {new_doc.asset.id!r}"
+        )
+    if type(new_doc) is not type(doc):
+        raise OperationError(
+            f"replace_spec cannot change asset kind from {doc.kind!r} to {new_doc.kind!r}"
+        )
+    _check_protected_regions(doc, new_doc)
+    data.clear()
+    data.update(new_doc.model_dump(mode="json"))
+    return "replace_spec", {"spec": doc.model_dump(mode="json")}
+
+
 _HANDLERS: dict[str, Handler] = {
     "resize_region": _resize_region,
     "translate_region": _translate_region,
@@ -549,6 +606,7 @@ _HANDLERS: dict[str, Handler] = {
     "add_frame": _add_frame,
     "remove_frame": _remove_frame,
     "set_region_visibility": _set_region_visibility,
+    "replace_spec": _replace_spec,
 }
 
 

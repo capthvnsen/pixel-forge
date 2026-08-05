@@ -25,9 +25,12 @@ From `revisions/operations.py::available_operations()` (also `pixel-forge operat
 | `add_frame` | `animation`, `at`, `frame` (a serialised `FrameSpec`) | Inserts a frame at index `at` (`0..len(frames)` inclusive). |
 | `remove_frame` | `animation`, `at` | Removes the frame at index `at`. Refuses to remove an animation's last remaining frame. |
 | `set_region_visibility` | `region`, `visible`, plus either (`animation` + `frames: [int, ...]`) or (`directions: [str, ...]`) | Sets a region's `visible` flag for specific frames of one animation, or for specific directions (via `direction_overrides`). Exactly one of the two targeting modes must be used. |
+| `replace_spec` | `spec` (a full, serialised document) | Replaces the entire spec document — for structural edits (adding a region, changing directions, editing palette colours) the other operations don't cover. Refuses a change to `asset.id` or `asset.type`, and refuses one that touches a `protected: true` region. `api.update_asset_spec` and MCP/CLI `update_asset_spec`/`update-spec` are thin wrappers over this operation. |
 
 Every handler operates on a `region` — a **protected region raises `OperationError`**
-before any change is attempted (`Region.protected`).
+before any change is attempted (`Region.protected`). `replace_spec` instead compares
+every protected region across the whole document (and, for terrain, within each
+tile), since it isn't scoped to a single named region.
 
 ## `op.protect`
 

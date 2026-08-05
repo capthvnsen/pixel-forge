@@ -1,9 +1,8 @@
 """MCP server exposing `pixel_forge.api` as tools for AI agents.
 
-Every tool below validates its input, calls exactly one `pixel_forge.api` function
-(or, for `update_asset_spec`, a thin composition of `api.py` internals — see that
-tool's docstring for why), and returns the called function's pydantic result model
-unchanged. No rendering, validation, or revision logic lives in this module.
+Every tool below validates its input, calls exactly one `pixel_forge.api` function,
+and returns the called function's pydantic result model unchanged. No rendering,
+validation, or revision logic lives in this module.
 
 The project root is fixed once at process startup (`main()`, from a CLI arg or the
 `PIXEL_FORGE_PROJECT` env var) and is never a per-tool parameter, so a calling agent
@@ -28,7 +27,6 @@ from typing import Literal
 from mcp.server.mcpserver import MCPServer
 from mcp.shared.exceptions import MCPError
 from mcp_types import INVALID_PARAMS
-from pydantic import ValidationError
 
 from pixel_forge import api
 from pixel_forge.api import (
@@ -41,8 +39,6 @@ from pixel_forge.api import (
     SeamReport,
 )
 from pixel_forge.errors import ForgeError
-from pixel_forge.rendering import render_asset_frames, render_terrain_tiles
-from pixel_forge.revisions import record_revision
 from pixel_forge.schemas import (
     AssetDocUnion,
     AssetType,
@@ -54,9 +50,7 @@ from pixel_forge.schemas import (
     RevisionDiff,
     RevisionRecord,
     StyleProfile,
-    TerrainAsset,
     ValidationReport,
-    parse_asset_doc,
 )
 
 # --- project root, fixed at startup, never a tool parameter --------------------------------
@@ -150,53 +144,6 @@ def create_asset(asset_type: AssetType, asset_id: str, dry_run: bool = False) ->
     return _guard(lambda: api.new_asset(_root(), asset_type, asset_id, dry_run=dry_run))
 
 
-def _update_asset_spec(
-    root: Path, asset_id: str, spec: dict[str, JSONValue], *, timestamp: str
-) -> RevisionRecord:
-    # ponytail: api.py has no public "replace the whole spec document and record it
-    # as a revision" function — apply_asset_operation only runs the named operations
-    # in revisions/operations.py's registry, which "replace_spec" is deliberately not
-    # part of. This composes api.py's own private load/validate helpers plus
-    # revisions.record_revision the same way api.apply_asset_operation does
-    # internally. If the CLI ever needs the same whole-document-replace behaviour,
-    # promote this to a real `api.update_asset_spec` function instead of duplicating it.
-    project = api._project(root)
-    doc_before = api._load_doc(project, asset_id)
-    try:
-        doc_after = parse_asset_doc(dict(spec))
-    except ForgeError:
-        raise
-    except ValidationError as exc:
-        raise ForgeError(
-            f"asset {asset_id!r}: replacement spec failed schema validation: {exc}"
-        ) from exc
-    if doc_after.asset.id != asset_id:
-        raise ForgeError(
-            f"update_asset_spec cannot change asset.id from {asset_id!r} to "
-            f"{doc_after.asset.id!r}; create a new asset instead"
-        )
-    if isinstance(doc_after, TerrainAsset):
-        report = api._validation_report(doc_after, {}, render_terrain_tiles(doc_after))
-    else:
-        report = api._validation_report(doc_after, render_asset_frames(doc_after), {})
-    op = OperationSpec(name="replace_spec", params={"spec": doc_after.model_dump(mode="json")})
-    inverse = OperationSpec(
-        name="replace_spec", params={"spec": doc_before.model_dump(mode="json")}
-    )
-    record = record_revision(
-        project.paths,
-        asset_id,
-        operation=op,
-        inverse=inverse,
-        doc_before=doc_before,
-        doc_after=doc_after,
-        timestamp=timestamp,
-        validation=report,
-    )
-    project.save_asset(doc_after)
-    return record
-
-
 @mcp_server.tool()
 def update_asset_spec(asset_id: str, spec: dict[str, JSONValue], timestamp: str) -> RevisionRecord:
     """Replace an asset's entire spec document in one shot and record the change as
@@ -208,8 +155,8 @@ def update_asset_spec(asset_id: str, spec: dict[str, JSONValue], timestamp: str)
     smaller, invertible edits it already knows how to do. `spec` is the full document
     exactly as it appears in the asset's YAML file (no "kind" field — that is derived
     from `asset.type`). Rejects a spec whose `asset.id` does not match `asset_id`
-    (create a new asset for that instead) and rejects a spec that fails schema
-    validation.
+    (create a new asset for that instead), rejects a spec that fails schema
+    validation, and rejects one that touches a `protected: true` region.
 
     Example:
         current = get_asset(asset_id="hero")
@@ -217,7 +164,7 @@ def update_asset_spec(asset_id: str, spec: dict[str, JSONValue], timestamp: str)
         spec["directions"].append("north")
         update_asset_spec(asset_id="hero", spec=spec, timestamp="2026-08-05T12:00:00Z")
     """
-    return _guard(lambda: _update_asset_spec(_root(), asset_id, spec, timestamp=timestamp))
+    return _guard(lambda: api.update_asset_spec(_root(), asset_id, spec, timestamp=timestamp))
 
 
 # --- rendering ---------------------------------------------------------------------------------

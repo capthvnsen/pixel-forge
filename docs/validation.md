@@ -24,8 +24,8 @@ validation pass.
 |---|---|---|---|---|
 | `PIX001` | error | deterministic | Every rendered frame's `(width, height)` equals `doc.asset.canvas`. | Check region offsets/`scale_size` aren't pushing content outside the canvas, or update `asset.canvas`. |
 | `PIX002` | error | deterministic | Alpha is strictly `0` or `255` on every pixel (binary transparency; the renderer never produces partial alpha, so this catches a broken/foreign backend). | Re-render with the local backend; never write partial-alpha pixels. |
-| `PIX003` | error | deterministic | No non-transparent colour appears that isn't in the palette — the signature of an AA/blend artifact. | Re-render nearest-neighbour only, or set `validation.allow_antialiasing: true` if intentional. |
-| `PIX004` | error | deterministic | Same off-palette check as `PIX003`, phrased as "not an approved colour" (runs even when `allow_antialiasing` is set, since `PIX003` is the AA-specific framing of the same underlying fact and `PIX004` is not gated by that option). | Use only palette colours, or add the colour to the palette. |
+| `PIX003` | error | deterministic | A non-palette colour lies on (or within rounding of) the segment between two palette colours in RGB space — the exact signature an antialiasing/blend artifact leaves. | Re-render nearest-neighbour only, or set `validation.allow_antialiasing: true` if intentional. |
+| `PIX004` | error | deterministic | A non-palette colour that is *not* a blend of two palette colours (that's `PIX003`'s concern) — a genuinely unapproved colour, never waivable via `allow_antialiasing`. | Use only palette colours, or add the colour to the palette. |
 | `PIX005` | error | deterministic | Palette colour count `<= validation.palette_limit` (default 24). | Trim the palette or raise `validation.palette_limit`. |
 | `PIX006` | warning | heuristic | Orphan pixels: an opaque pixel with zero opaque 8-neighbours. | Remove the stray pixel or connect it to the surrounding shape. |
 | `PIX007` | warning | heuristic | Silhouette-outline consistency: silhouette-edge pixels (opaque, 4-adjacent to transparent/canvas edge) are grouped by colour; any non-dominant colour covering under 10% of the edge is flagged as a likely stray pixel or accidental palette swap. | Check for a stray outline pixel or an accidental colour swap; a legitimately small accent colour near the edge can also be moved further inside the shape (see `engineer.yaml`'s accent-stripe inset convention). |
@@ -76,7 +76,7 @@ validation:
   palette_limit: 32          # PIX005
   require_stable_baseline: false   # skips ANI001 entirely
   require_stable_anchors: false    # skips ANI002 entirely
-  allow_antialiasing: true         # skips PIX003 (PIX004 still runs)
+  allow_antialiasing: true         # skips PIX003; PIX004 still runs, but never fires on a blend
   max_seam_mismatch: 1             # TIL003 / TIL004 tolerance, in pixels
   max_repeat_ratio: 0.8            # TIL007 threshold
 ```

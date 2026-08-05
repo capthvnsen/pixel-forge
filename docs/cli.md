@@ -118,6 +118,18 @@ timestamp).
 Text output: revision id, operation, timestamp, hash transition, affected
 regions/directions/frames. JSON: `RevisionRecord`.
 
+### `pixel-forge update-spec ASSET_ID --file PATH [--timestamp ISO8601] [--root ROOT] [--dry-run]`
+
+Replaces an asset's entire spec document with the YAML at `--file` and records the
+change as a `replace_spec` revision — the same audit trail `revise` produces, but for
+structural edits the operation DSL doesn't cover (adding a region, changing
+directions, editing palette colours). Rejects a document whose `asset.id` doesn't
+match `ASSET_ID`, one that fails schema validation, or one that touches a
+`protected: true` region. `--timestamp` defaults to the current UTC time, same as
+`revise`. The equivalent MCP tool is `update_asset_spec`.
+
+Text output/JSON: same `RevisionRecord` shape as `revise`.
+
 ### `pixel-forge operations`
 
 Lists every operation `revise` understands: name, params, description. No `--root`

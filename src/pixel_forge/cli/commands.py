@@ -21,6 +21,7 @@ import typer
 from pydantic import BaseModel, ValidationError
 
 from pixel_forge import api
+from pixel_forge.domain import load_yaml
 from pixel_forge.errors import ForgeError
 from pixel_forge.schemas import (
     AssetManifest,
@@ -327,6 +328,31 @@ def revise_cmd(
     resolved_timestamp = timestamp if timestamp is not None else _default_timestamp()
     record = api.apply_asset_operation(
         root, resolved_id, op, timestamp=resolved_timestamp, dry_run=dry_run
+    )
+    _emit(state, record, _render_revision_record)
+
+
+def update_spec_cmd(
+    ctx: typer.Context,
+    asset_id: str = typer.Argument(..., help=_ASSET_ID_HELP),
+    file: Path = typer.Option(
+        ..., "--file", help="Path to a YAML file holding the replacement spec document."
+    ),
+    timestamp: str | None = typer.Option(
+        None, "--timestamp", help="ISO-8601 UTC timestamp for the revision; defaults to now."
+    ),
+    root: Path = typer.Option(Path("."), "--root", help=_ROOT_HELP),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Compute the revision without writing it."
+    ),
+) -> None:
+    """Replace an asset's entire spec document from FILE and record it as a revision."""
+    state = _state(ctx)
+    resolved_id = _normalize_asset_id(asset_id)
+    spec = load_yaml(file)
+    resolved_timestamp = timestamp if timestamp is not None else _default_timestamp()
+    record = api.update_asset_spec(
+        root, resolved_id, spec, timestamp=resolved_timestamp, dry_run=dry_run
     )
     _emit(state, record, _render_revision_record)
 

@@ -152,25 +152,58 @@ def build_contact_sheet(
 
 
 def build_atlas(
-    images: Mapping[str, Canvas], columns: int | None = None
+    images: Mapping[str, Canvas],
+    columns: int | None = None,
+    *,
+    rows: Sequence[Sequence[str]] | None = None,
 ) -> tuple[Canvas, dict[str, SheetCell]]:
-    """Uniform-grid atlas for tiles, keys iterated in sorted order. Every returned `SheetCell`
-    has `animation` and `direction` both set to the key, `index=0`."""
+    """Uniform-grid atlas for tiles. Every returned `SheetCell` has `animation` and
+    `direction` both set to the key, `index=0`.
+
+    Default (`rows=None`): keys iterated in sorted order, packed into `columns`-wide
+    rows (one row when `columns` is `None`) -- unchanged from before `rows` existed.
+
+    Explicit layout (`rows` given): each inner sequence is one atlas row, laid out left
+    to right in exactly that order; a row shorter than the widest row is padded with
+    empty cells. The set of ids across `rows` must equal `images`'s keys exactly, or
+    `ForgeError` is raised. `columns` is ignored in this mode.
+    """
     if not images:
         raise ForgeError("build_atlas: images must be non-empty")
-    keys = sorted(images)
-    sizes = {(images[k].width, images[k].height) for k in keys}
+    sizes = {(img.width, img.height) for img in images.values()}
     if len(sizes) > 1:
         raise ForgeError(f"build_atlas: images must share one size, got {sorted(sizes)}")
     cw, ch = next(iter(sizes))
 
+    if rows is not None:
+        row_ids = {tile_id for row in rows for tile_id in row}
+        image_ids = set(images)
+        if row_ids != image_ids:
+            raise ForgeError(
+                "build_atlas: rows layout ids must match images exactly "
+                f"(missing from rows: {sorted(image_ids - row_ids)}, "
+                f"unknown in rows: {sorted(row_ids - image_ids)})"
+            )
+        n_columns = max(len(row) for row in rows)
+        atlas = Canvas(n_columns * cw, len(rows) * ch)
+        row_cells: dict[str, SheetCell] = {}
+        for y, row in enumerate(rows):
+            for x, tile_id in enumerate(row):
+                px, py = x * cw, y * ch
+                atlas.blit(images[tile_id], (px, py))
+                row_cells[tile_id] = SheetCell(
+                    direction=tile_id, animation=tile_id, index=0, x=px, y=py, w=cw, h=ch
+                )
+        return atlas, row_cells
+
+    keys = sorted(images)
     if columns is None:
         columns = len(keys)
     if columns < 1:
         raise ForgeError("build_atlas: columns must be >= 1")
-    rows = -(-len(keys) // columns)
+    n_rows = -(-len(keys) // columns)
 
-    atlas = Canvas(columns * cw, rows * ch)
+    atlas = Canvas(columns * cw, n_rows * ch)
     cells: dict[str, SheetCell] = {}
     for i, key in enumerate(keys):
         x, y = (i % columns) * cw, (i // columns) * ch

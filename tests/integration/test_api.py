@@ -11,7 +11,7 @@ import pytest
 
 from pixel_forge import api, templates
 from pixel_forge.domain import Project
-from pixel_forge.errors import AssetNotFoundError, ExportError, PathSecurityError
+from pixel_forge.errors import AssetNotFoundError, ExportError, ForgeError, PathSecurityError
 from pixel_forge.schemas import AssetType, GodotManifest, OperationSpec, parse_asset_doc
 
 ASSET_TYPES: tuple[AssetType, ...] = ("character", "enemy", "prop", "terrain")
@@ -283,6 +283,44 @@ def test_apply_asset_operation_dry_run_leaves_spec_untouched(tmp_path: Path) -> 
     after = spec_path.read_bytes()
     assert before == after
     assert api.list_asset_revisions(root, "hero") == []
+
+
+# --- update_asset_spec ------------------------------------------------------------------------
+
+
+def test_update_asset_spec_replaces_document_and_records_revision(tmp_path: Path) -> None:
+    root = _init(tmp_path)
+    api.new_asset(root, "character", "hero")
+    spec = api.get_asset(root, "hero").model_dump(mode="json")
+    spec["directions"] = ["south", "north"]
+
+    record = api.update_asset_spec(root, "hero", spec, timestamp="2026-01-01T00:00:00Z")
+    assert record.operation.name == "replace_spec"
+    assert record.hash_before != record.hash_after
+
+    updated = api.get_asset(root, "hero")
+    assert updated.directions == ["south", "north"]
+
+
+def test_update_asset_spec_rejects_asset_id_change(tmp_path: Path) -> None:
+    root = _init(tmp_path)
+    api.new_asset(root, "character", "hero")
+    spec = api.get_asset(root, "hero").model_dump(mode="json")
+    spec["asset"]["id"] = "villain"
+    with pytest.raises(ForgeError):
+        api.update_asset_spec(root, "hero", spec, timestamp="2026-01-01T00:00:00Z")
+
+
+def test_update_asset_spec_dry_run_leaves_spec_untouched(tmp_path: Path) -> None:
+    root = _init(tmp_path)
+    api.new_asset(root, "character", "hero")
+    spec_path = root / "assets" / "hero" / "hero.yaml"
+    before = spec_path.read_bytes()
+    spec = api.get_asset(root, "hero").model_dump(mode="json")
+    spec["directions"] = ["south", "north"]
+
+    api.update_asset_spec(root, "hero", spec, timestamp="2026-01-01T00:00:00Z", dry_run=True)
+    assert spec_path.read_bytes() == before
 
 
 def test_compare_asset_revisions_after_two_operations(tmp_path: Path) -> None:

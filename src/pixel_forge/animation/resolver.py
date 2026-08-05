@@ -7,7 +7,7 @@ of animation A in direction D" is computed here, once, deterministically.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from types import MappingProxyType
 
 from pixel_forge.errors import ForgeError
@@ -29,6 +29,13 @@ class ResolvedFrame:
     events: tuple[str, ...]
     transforms: Mapping[str, RegionTransform]  # region name -> merged transform
     mirrored_from: str | None  # source direction when this one is mirrored
+    # Per-region transforms for mirror-*unsafe* regions on a mirrored direction: same
+    # as `transforms` except a `direction_overrides` entry *inherited* from the mirror
+    # source (no override authored for this direction) has its offset's x component
+    # negated, since an inherited offset was written describing the source direction.
+    # Identical to `transforms` whenever overrides weren't inherited. See
+    # `rendering.local`'s module docstring for why this exists.
+    mirror_unsafe_transforms: Mapping[str, RegionTransform] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -81,24 +88,42 @@ def _validate_mirror_map(doc: SpriteAssetBase) -> None:
 
 def _direction_overrides(
     doc: SpriteAssetBase, direction: str, mirror_src: str | None
-) -> Mapping[str, RegionTransform]:
-    if mirror_src is not None:
-        if direction in doc.direction_overrides:
-            overrides = doc.direction_overrides[direction]
-        else:
-            overrides = doc.direction_overrides.get(mirror_src, {})
+) -> tuple[Mapping[str, RegionTransform], bool]:
+    """Return this direction's region overrides and whether they were *inherited*.
+
+    A direction with its own `direction_overrides` entry always uses that (never
+    inherited, even if mirrored). A mirrored direction with no entry of its own
+    borrows its source direction's overrides verbatim (`inherited=True`) — the
+    caller negates the x component of an inherited offset for mirror-unsafe
+    regions, since an inherited offset was authored describing the source
+    direction, not this one.
+    """
+    if direction in doc.direction_overrides:
+        overrides = doc.direction_overrides[direction]
+        inherited = False
+    elif mirror_src is not None:
+        overrides = doc.direction_overrides.get(mirror_src, {})
+        inherited = True
     else:
-        overrides = doc.direction_overrides.get(direction, {})
+        overrides = {}
+        inherited = False
     for region_name in overrides:
         if region_name not in doc.regions:
             raise ForgeError(f"direction override references unknown region {region_name!r}")
-    return overrides
+    return overrides, inherited
+
+
+def _negate_offset_x(transform: RegionTransform) -> RegionTransform:
+    ox, oy = transform.offset
+    return transform.model_copy(update={"offset": (-ox, oy)})
 
 
 def _merge_frame_transforms(
     doc: SpriteAssetBase,
     overrides: Mapping[str, RegionTransform],
     frame: FrameSpec,
+    *,
+    negate_override_offset_x: bool = False,
 ) -> Mapping[str, RegionTransform]:
     for region_name in frame.transforms:
         if region_name not in doc.regions:
@@ -107,7 +132,10 @@ def _merge_frame_transforms(
     for region_name in doc.regions:
         layers = [RegionTransform()]
         if region_name in overrides:
-            layers.append(overrides[region_name])
+            override_layer = overrides[region_name]
+            if negate_override_offset_x:
+                override_layer = _negate_offset_x(override_layer)
+            layers.append(override_layer)
         if region_name in frame.transforms:
             layers.append(frame.transforms[region_name])
         result[region_name] = merge_transforms(*layers)
@@ -121,19 +149,28 @@ def _resolve_direction_frames(
     direction: str,
 ) -> list[ResolvedFrame]:
     mirror_src = doc.mirror.get(direction)
-    overrides = _direction_overrides(doc, direction, mirror_src)
-    return [
-        ResolvedFrame(
-            direction=direction,
-            animation=animation_name,
-            index=index,
-            duration_ms=frame.duration_ms,
-            events=tuple(frame.events),
-            transforms=_merge_frame_transforms(doc, overrides, frame),
-            mirrored_from=mirror_src,
+    overrides, inherited = _direction_overrides(doc, direction, mirror_src)
+    resolved: list[ResolvedFrame] = []
+    for index, frame in enumerate(animation.frames):
+        transforms = _merge_frame_transforms(doc, overrides, frame)
+        mirror_unsafe_transforms = (
+            transforms
+            if not inherited
+            else _merge_frame_transforms(doc, overrides, frame, negate_override_offset_x=True)
         )
-        for index, frame in enumerate(animation.frames)
-    ]
+        resolved.append(
+            ResolvedFrame(
+                direction=direction,
+                animation=animation_name,
+                index=index,
+                duration_ms=frame.duration_ms,
+                events=tuple(frame.events),
+                transforms=transforms,
+                mirrored_from=mirror_src,
+                mirror_unsafe_transforms=mirror_unsafe_transforms,
+            )
+        )
+    return resolved
 
 
 def resolve_frames(doc: SpriteAssetBase) -> list[ResolvedFrame]:

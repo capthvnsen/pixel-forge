@@ -366,6 +366,23 @@ def _finish_render(
     )
 
 
+def _terrain_atlas_rows(doc: TerrainAsset) -> list[list[str]] | None:
+    """Explicit `build_atlas` row layout for `doc`'s tiles: each animated tile gets its
+    own row, frames contiguous from column 0 -- so Godot's animation-strip contiguity
+    requirement holds structurally rather than by accident of sorted-key packing. Static
+    tiles (everything not itself an animated tile's frame) fill one more row, sorted.
+    `None` (the default sorted-key atlas) when `doc` has no animated tiles, so nothing
+    changes for terrain assets without animated water/lava/etc tiles."""
+    if not doc.animated_tiles:
+        return None
+    frame_ids = {tile_id for spec in doc.animated_tiles.values() for tile_id in spec.frames}
+    rows = [list(doc.animated_tiles[name].frames) for name in sorted(doc.animated_tiles)]
+    static_ids = sorted(tile_id for tile_id in doc.tiles if tile_id not in frame_ids)
+    if static_ids:
+        rows.append(static_ids)
+    return rows
+
+
 def _render_terrain(
     project: Project, doc: TerrainAsset, *, force: bool, dry_run: bool
 ) -> RenderResult:
@@ -400,13 +417,14 @@ def _render_terrain(
 
     build_dir.mkdir(parents=True, exist_ok=True)
     tile_canvases = render_terrain_tiles(doc)
-    atlas, atlas_cells = build_atlas(tile_canvases)
+    atlas, atlas_cells = build_atlas(tile_canvases, rows=_terrain_atlas_rows(doc))
     atlas.save_png(project.root / sheet_path)
     tile_size = next(iter(doc.tiles.values())).size
+    tw, th = tile_size
     sheet_manifest = SheetManifest(
         image_path=sheet_path,
-        columns=len(atlas_cells),
-        rows=1,
+        columns=atlas.width // tw,
+        rows=atlas.height // th,
         cell_size=tile_size,
         cells=_cells_manifest(list(atlas_cells.values())),
     )
@@ -585,7 +603,7 @@ def export_godot(root: Path, asset_id: str, *, dry_run: bool = False) -> GodotMa
 
     if isinstance(doc, TerrainAsset):
         tiles = render_terrain_tiles(doc)
-        _, atlas_cells = build_atlas(tiles)
+        _, atlas_cells = build_atlas(tiles, rows=_terrain_atlas_rows(doc))
         atlas_rel = _rel(project.root, build_dir / f"{asset_id}_atlas.png")
         _require_texture_on_disk(project, atlas_rel, asset_id)
         manifest = build_godot_manifest(
@@ -671,6 +689,21 @@ def apply_asset_operation(
     )
     project.save_asset(doc_after)
     return record
+
+
+def update_asset_spec(
+    root: Path,
+    asset_id: str,
+    spec: Mapping[str, Any],
+    *,
+    timestamp: str,
+    dry_run: bool = False,
+) -> RevisionRecord:
+    """Replace an asset's entire spec document in one shot, recorded as a
+    `replace_spec` revision (see `revisions.operations`), for structural edits the
+    named operations in `apply_asset_operation` don't cover."""
+    op = OperationSpec(name="replace_spec", params={"spec": dict(spec)})
+    return apply_asset_operation(root, asset_id, op, timestamp=timestamp, dry_run=dry_run)
 
 
 def compare_asset_revisions(root: Path, asset_id: str, rev_a: str, rev_b: str) -> RevisionDiff:

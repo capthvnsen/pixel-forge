@@ -232,12 +232,12 @@ def test_scale_size_ignored_on_pixel_shape() -> None:
 # --- mirroring -------------------------------------------------------------------------------
 
 
-def _mirror_doc(*, unsafe: bool) -> Any:
+def _mirror_doc(*, unsafe: bool, direction_overrides: dict[str, Any] | None = None) -> Any:
     return _doc(
         canvas=[16, 16],
         directions=["east", "west"],
         mirror={"west": "east"},
-        anchors={"root": [0, 0]},
+        anchors={"root": [0, 0], "hand": [12, 4]},
         regions={
             "safe": {
                 "anchor": "root",
@@ -246,12 +246,13 @@ def _mirror_doc(*, unsafe: bool) -> Any:
                 "shapes": [{"op": "rect", "color": "red", "at": [1, 1], "size": [2, 2]}],
             },
             "flag": {
-                "anchor": "root",
+                "anchor": "hand",
                 "layer": 1,
                 "mirror_safe": not unsafe,
-                "shapes": [{"op": "pixel", "color": "blue", "at": [4, 4]}],
+                "shapes": [{"op": "pixel", "color": "blue", "at": [0, 0]}],
             },
         },
+        direction_overrides=direction_overrides or {},
     )
 
 
@@ -283,9 +284,47 @@ def test_mirror_safe_false_region_stays_unmirrored() -> None:
     # The mirror-safe region no longer occupies its own (unmirrored) position on west.
     assert west_canvas.get_pixel(1, 1) == (0, 0, 0, 0)
 
-    # The unsafe "flag" pixel stays at the same (unmirrored) position on both directions.
-    assert east_canvas.get_pixel(4, 4) == BLUE
-    assert west_canvas.get_pixel(4, 4) == BLUE
+    # The unsafe "flag" region's shapes are drawn unflipped, but its anchor ("hand" at
+    # [12, 4]) is still mirrored so it stays attached to the flipped body: (12,4) on
+    # the source direction, (canvas_w - 1 - 12, 4) = (3, 4) on the mirrored one.
+    assert east_canvas.get_pixel(12, 4) == BLUE
+    assert west_canvas.get_pixel(3, 4) == BLUE
+    # It must not be left behind at the unmirrored anchor position.
+    assert west_canvas.get_pixel(12, 4) == (0, 0, 0, 0)
+
+
+def test_mirror_unsafe_region_inherited_override_offset_x_negated() -> None:
+    # "east" (the mirror source) authors an offset for the unsafe "flag" region;
+    # "west" has no override of its own, so it inherits east's — but only the x
+    # component of that inherited offset should flip, to keep tracking the mirrored
+    # anchor.
+    doc = _mirror_doc(unsafe=True, direction_overrides={"east": {"flag": {"offset": [2, -1]}}})
+    palette = resolve_palette(doc.palette)
+    frames = resolve_frames(doc)
+    east = next(f for f in frames if f.direction == "east")
+    west = next(f for f in frames if f.direction == "west")
+    backend = LocalRenderBackend()
+    east_canvas = backend.render_frame(doc, east, palette)
+    west_canvas = backend.render_frame(doc, west, palette)
+
+    # East (source, authored): anchor (12,4) + offset (2,-1) = (14,3).
+    assert east_canvas.get_pixel(14, 3) == BLUE
+    # West (inherited, mirrored anchor (3,4) + negated-x offset (-2,-1)) = (1,3).
+    assert west_canvas.get_pixel(1, 3) == BLUE
+
+
+def test_mirror_unsafe_region_authored_override_used_verbatim() -> None:
+    # "west" authors its own override for the unsafe "flag" region: used exactly as
+    # written, not negated, since the author was describing "west" directly.
+    doc = _mirror_doc(unsafe=True, direction_overrides={"west": {"flag": {"offset": [5, 2]}}})
+    palette = resolve_palette(doc.palette)
+    frames = resolve_frames(doc)
+    west = next(f for f in frames if f.direction == "west")
+    backend = LocalRenderBackend()
+    west_canvas = backend.render_frame(doc, west, palette)
+
+    # Mirrored anchor (3,4) + authored offset (5,2) = (8,6), not negated.
+    assert west_canvas.get_pixel(8, 6) == BLUE
 
 
 # --- clipping ----------------------------------------------------------------------------------

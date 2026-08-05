@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import yaml
 from typer.testing import CliRunner, Result
 
 from pixel_forge import __version__, templates
@@ -258,6 +259,49 @@ def test_revise_mutates_spec_and_appends_revision(tmp_path: Path) -> None:
     payload = json.loads(revisions.stdout)
     assert len(payload) == 1
     assert payload[0]["operation"]["name"] == "translate_region"
+
+
+# --- update-spec replaces the whole document and appends a revision ------------------------------
+
+
+def _write_updated_spec(root: Path, tmp_path: Path, asset_id: str, **overrides: object) -> Path:
+    doc = Project.load(root).load_asset(asset_id)
+    spec = doc.model_dump(mode="json", exclude_defaults=True)
+    spec.pop("kind", None)
+    spec.update(overrides)
+    spec_file = tmp_path / f"{asset_id}_updated.yaml"
+    spec_file.write_text(yaml.safe_dump(spec, sort_keys=False), encoding="utf-8")
+    return spec_file
+
+
+def test_update_spec_replaces_document_and_appends_revision(tmp_path: Path) -> None:
+    root = _init(tmp_path)
+    assert _invoke("new", "character", "hero", "--root", str(root)).exit_code == 0
+    spec_file = _write_updated_spec(root, tmp_path, "hero", directions=["south", "north"])
+
+    result = _invoke("update-spec", "hero", "--file", str(spec_file), "--root", str(root))
+    assert result.exit_code == 0, result.output
+
+    updated = Project.load(root).load_asset("hero")
+    assert updated.directions == ["south", "north"]  # type: ignore[union-attr]
+
+    revisions = _invoke("--json", "revisions", "hero", "--root", str(root))
+    payload = json.loads(revisions.stdout)
+    assert len(payload) == 1
+    assert payload[0]["operation"]["name"] == "replace_spec"
+
+
+def test_update_spec_dry_run_writes_nothing(tmp_path: Path) -> None:
+    root = _init(tmp_path)
+    assert _invoke("new", "character", "hero", "--root", str(root)).exit_code == 0
+    spec_file = _write_updated_spec(root, tmp_path, "hero", directions=["south", "north"])
+    before = _snapshot(root)
+
+    result = _invoke(
+        "update-spec", "hero", "--file", str(spec_file), "--root", str(root), "--dry-run"
+    )
+    assert result.exit_code == 0, result.output
+    assert _snapshot(root) == before
 
 
 # --- asset id normalisation ---------------------------------------------------------------------

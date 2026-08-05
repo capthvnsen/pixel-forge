@@ -4,23 +4,24 @@ deterministically, and the sample map/transitions are internally consistent."""
 
 from __future__ import annotations
 
+import json
+import shutil
 from pathlib import Path
+from typing import Any
 
+import pytest
+
+from pixel_forge import api
 from pixel_forge.animation.resolver import resolve_terrain_frames
 from pixel_forge.domain.loader import load_asset_doc
 from pixel_forge.domain.palette import resolve_palette
 from pixel_forge.rendering.local import render_terrain_tiles
 from pixel_forge.rendering.sheet import build_atlas, check_seams
-from pixel_forge.schemas import TerrainAsset
+from pixel_forge.schemas import GodotManifest, TerrainAsset
 from pixel_forge.validation.engine import RuleContext, run_validation
 
-ASSET_PATH = (
-    Path(__file__).resolve().parents[2]
-    / "examples"
-    / "assets"
-    / "forest_tileset"
-    / "forest_tileset.yaml"
-)
+EXAMPLES_ROOT = Path(__file__).resolve().parents[2] / "examples"
+ASSET_PATH = EXAMPLES_ROOT / "assets" / "forest_tileset" / "forest_tileset.yaml"
 
 
 def _load() -> TerrainAsset:
@@ -110,3 +111,51 @@ def test_render_is_deterministic() -> None:
     assert tiles_a.keys() == tiles_b.keys()
     for tile_id in tiles_a:
         assert tiles_a[tile_id].equals(tiles_b[tile_id])
+
+
+# --- Godot animated-tile contract: the built forest_tileset.forge.json ------------------
+
+
+@pytest.fixture
+def _built_forge_json(tmp_path: Path) -> dict[str, Any]:
+    """Builds `examples/` (copied so the repo tree is never written to) and returns the
+    parsed `build/godot/forest_tileset.forge.json` the real `build_all` pipeline wrote."""
+    root = tmp_path / "examples"
+    shutil.copytree(EXAMPLES_ROOT, root, ignore=shutil.ignore_patterns("build"))
+    report = api.build_all(root)
+    assert report.blocking is False, report.failed
+
+    manifest_path = root / "build" / "godot" / "forest_tileset.forge.json"
+    data = json.loads(manifest_path.read_text(encoding="utf-8"))
+    GodotManifest.model_validate(data)  # round-trips through the schema
+    return data
+
+
+def test_animated_tile_frames_are_contiguous_and_horizontally_adjacent(
+    _built_forge_json: dict[str, Any],
+) -> None:
+    tileset = _built_forge_json["tileset"]
+    animated_tiles = tileset["animated_tiles"]
+    assert animated_tiles, "forest_tileset.yaml defines an animated water tile"
+
+    for name, anim in animated_tiles.items():
+        frames = anim["frames"]
+        assert len(frames) >= 2, name
+        base_x, base_y = frames[0]["x"], frames[0]["y"]
+        for i, frame in enumerate(frames):
+            assert frame["x"] == base_x + i, f"{name} frame {i} not horizontally adjacent"
+            assert frame["y"] == base_y, f"{name} frame {i} not on the base frame's row"
+
+
+def test_animated_frames_do_not_appear_as_separate_tiles(
+    _built_forge_json: dict[str, Any],
+) -> None:
+    tileset = _built_forge_json["tileset"]
+    tile_ids = {t["tile_id"] for t in tileset["tiles"]}
+
+    for anim in tileset["animated_tiles"].values():
+        frame_ids = [f["tile_id"] for f in anim["frames"]]
+        base_id, extra_ids = frame_ids[0], frame_ids[1:]
+        assert base_id in tile_ids
+        for frame_id in extra_ids:
+            assert frame_id not in tile_ids, f"{frame_id} must not be its own tiles entry"

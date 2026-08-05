@@ -193,16 +193,18 @@ so a future run of that exact command isn't mistaken for a regression.
   which gets a `terrain_set` but no peering bits, matching its absence from
   `terrain_bits`. A human may need to confirm base-tile terrain assignment
   for wholly uniform tiles in the terrain painter.
-- **`animated_tiles` frames that reuse existing, non-adjacent named tiles
-  cannot always be represented.** Godot's `TileSetAtlasSource` animation
-  model requires an animated tile's frames to occupy a single contiguous
-  horizontal strip of atlas cells starting at its own coordinates, entirely
-  inside the atlas texture. The neutral manifest schema instead lists
-  arbitrary already-named tile ids as frames (see the `forest` fixture's
-  `water_flow`, which cycles between the pre-existing `grass` and `dirt`
-  tiles). When a tile's frames don't form such a strip, the importer leaves
-  that tile static and emits a warning naming the tile and why, rather than
-  calling a Godot API that would misbehave or throw an engine-level error.
+- **`animated_tiles` frames must occupy a contiguous horizontal atlas
+  strip**, per Godot's `TileSetAtlasSource` animation model: an animated
+  tile is one Godot tile (its base/first frame); the remaining frames are
+  cells immediately to its right, otherwise empty. The atlas layout
+  (`api.py`'s terrain render path) gives every animated tile its own
+  dedicated row for exactly this reason, and `exporters.godot.tileset`
+  raises `ExportError` at build time if a manifest's frames aren't
+  contiguous, so only the base frame ever appears in `tileset.tiles`. The
+  importer still re-validates contiguity, atlas bounds, and strip emptiness
+  itself before calling into the engine (a manifest is untrusted input),
+  and fails the import with a clear error, not a silent warning, if that
+  check fails.
 - **Props ignore the `sprite_frames` payload** except to look up an
   animation's `loop` flag (by matching `sprite_frames` keys prefixed
   `<animation>_`) for the corresponding `Animation` resource's

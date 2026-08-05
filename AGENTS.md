@@ -101,7 +101,7 @@ schemas/         (empty at the repo root; JSON Schema output goes wherever
 
 ```bash
 uv sync                       # install dependencies
-uv run pytest                 # 403 tests as of this doc; must all pass
+uv run pytest                 # 422 tests as of this doc; must all pass
 uv run mypy                   # strict mode (see pyproject.toml [tool.mypy]); must be clean
 uv run ruff check .           # lint; must be clean
 uv run ruff format .          # format
@@ -393,7 +393,7 @@ demonstrate, and `docs/validation.md` for why each asset's non-zero findings (al
 
 ## Definition of done for a code change in this repo
 
-1. `uv run pytest` passes in full (403 tests as of this doc — check the current count
+1. `uv run pytest` passes in full (422 tests as of this doc — check the current count
    didn't silently drop).
 2. `uv run mypy` is clean under strict mode.
 3. `uv run ruff check .` is clean.

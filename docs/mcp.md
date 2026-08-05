@@ -1,10 +1,9 @@
 # MCP server reference
 
 `src/pixel_forge/mcp/server.py` exposes `pixel_forge.api` as MCP tools for AI agents.
-Every tool validates its input, calls exactly one `pixel_forge.api` function (with one
-documented exception — `update_asset_spec`, below), and returns that function's
-pydantic result model unchanged. No rendering, validation, or revision logic lives in
-this module.
+Every tool validates its input, calls exactly one `pixel_forge.api` function, and
+returns that function's pydantic result model unchanged. No rendering, validation, or
+revision logic lives in this module.
 
 **SDK note:** the installed package is `mcp==2.0.0`, which ships
 `mcp.server.mcpserver.MCPServer` — there is no `mcp.server.fastmcp.FastMCP` in this
@@ -78,20 +77,15 @@ template is guaranteed to render/validate with zero blocking findings.
 
 **`update_asset_spec(asset_id: str, spec: dict[str, JSONValue], timestamp: str) -> RevisionRecord`**
 Replace the entire spec document in one shot and record it as a revision (operation
-name `"replace_spec"`). `spec` is the full document as it appears in YAML, minus
-`kind` (derived from `asset.type`). Rejects a spec whose `asset.id` doesn't match
-`asset_id`, and rejects one that fails schema validation. Use this for structural
-edits the operation DSL doesn't cover (adding a region, changing directions, editing
-palette colours); use `apply_asset_operation` for the smaller invertible edits it
-already knows.
-
-*Implementation note:* `api.py` has no public "replace the whole doc and record a
-revision" function — `apply_asset_operation` only runs the named operations in
-`revisions/operations.py`'s registry, and `"replace_spec"` is deliberately not one of
-them. `update_asset_spec` composes `api.py`'s own private load/validate helpers plus
-`revisions.record_revision` the same way `api.apply_asset_operation` does internally.
-If the CLI ever needs the same whole-document-replace behaviour, that logic should be
-promoted to a real `api.update_asset_spec` rather than staying duplicated.
+name `"replace_spec"`, a real entry in `revisions/operations.py`'s registry). `spec`
+is the full document as it appears in YAML, minus `kind` (derived from `asset.type`).
+Rejects a spec whose `asset.id` doesn't match `asset_id`, one that fails schema
+validation, or one that touches a `protected: true` region. Being a real, registered
+operation, a `replace_spec` revision is revertible like any other. Use this for
+structural edits the operation DSL doesn't cover (adding a region, changing
+directions, editing palette colours); use `apply_asset_operation` for the smaller
+invertible edits it already knows. The CLI exposes the same behaviour as
+`pixel-forge update-spec <asset_id> --file <path.yaml>`.
 
 ```
 current = get_asset(asset_id="hero")

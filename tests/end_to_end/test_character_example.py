@@ -12,7 +12,6 @@ from pathlib import Path
 from pixel_forge.animation.resolver import resolve_frames
 from pixel_forge.domain.loader import load_asset_doc
 from pixel_forge.domain.palette import resolve_palette
-from pixel_forge.rendering.canvas import Canvas
 from pixel_forge.rendering.local import render_asset_frames
 from pixel_forge.schemas import CharacterAsset
 from pixel_forge.validation.engine import RuleContext, run_validation
@@ -107,10 +106,3 @@ def test_helmet_and_weapon_regions_reference_declared_anchors() -> None:
     assert doc.mirror == {"east": "west"}
     assert doc.direction_overrides["north"]["weapon"].visible is False
     assert doc.direction_overrides["north"]["backpack"].visible is True
-
-
-def test_canvas_type_is_canvas() -> None:
-    doc = _load()
-    frames = render_asset_frames(doc)
-    sample = next(iter(frames.values()))
-    assert isinstance(sample, Canvas)

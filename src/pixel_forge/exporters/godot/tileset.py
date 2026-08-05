@@ -65,8 +65,20 @@ def build_tileset(
     tw, th = next(iter(sizes))
     tile_size: Vec2 = (tw, th)
 
+    # An animated tile is one Godot tile: the base (first) frame. The remaining frames
+    # are the engine's animation-strip cells, not tiles in their own right -- map every
+    # frame id to its animated tile's base id so both `tiles` and `sample_map` below
+    # resolve a non-base frame reference to the tile Godot actually knows about.
+    frame_base: dict[str, str] = {}
+    for spec in doc.animated_tiles.values():
+        base = spec.frames[0]
+        for frame_id in spec.frames:
+            frame_base[frame_id] = base
+
     tiles = []
     for tile_id in sorted(atlas_cells):
+        if frame_base.get(tile_id, tile_id) != tile_id:
+            continue  # non-base animation frame -- not its own tile
         x, y = _coord(atlas_cells, tile_id, tw, th)
         tiles.append(GodotTileCoord(tile_id=tile_id, x=x, y=y))
 
@@ -87,8 +99,17 @@ def build_tileset(
     animated_tiles = {}
     for name, spec in doc.animated_tiles.items():
         frames = []
-        for tile_id in spec.frames:
+        base_x, base_y = 0, 0
+        for i, tile_id in enumerate(spec.frames):
             x, y = _coord(atlas_cells, tile_id, tw, th)
+            if i == 0:
+                base_x, base_y = x, y
+            elif (x, y) != (base_x + i, base_y):
+                raise ExportError(
+                    f"animated tile {name!r}: frame {tile_id!r} sits at ({x}, {y}), not "
+                    f"contiguous with base frame {spec.frames[0]!r} at ({base_x}, {base_y}) -- "
+                    "Godot requires an animated tile's frames in one horizontal atlas strip"
+                )
             frames.append(GodotTileCoord(tile_id=tile_id, x=x, y=y))
         animated_tiles[name] = GodotAnimatedTileExport(
             frames=frames, frame_duration_ms=spec.frame_duration_ms, loop=spec.loop
@@ -100,7 +121,11 @@ def build_tileset(
             size=doc.sample_map.size,
             layers={
                 layer_name: [
-                    [_coord(atlas_cells, tile_id, tw, th) for tile_id in row] for row in rows
+                    [
+                        _coord(atlas_cells, frame_base.get(tile_id, tile_id), tw, th)
+                        for tile_id in row
+                    ]
+                    for row in rows
                 ]
                 for layer_name, rows in doc.sample_map.layers.items()
             },
