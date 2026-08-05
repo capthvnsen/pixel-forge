@@ -1,0 +1,89 @@
+{
+  "animation_player": {
+    "tracks": [
+      {
+        "keyframes": [
+          {
+            "time_ms": 0,
+            "value": [
+              0,
+              0
+            ]
+          },
+          {
+            "time_ms": 100,
+            "value": [
+              1,
+              0
+            ]
+          }
+        ],
+        "node_path": "spin/vane",
+        "property": "position"
+      }
+    ]
+  },
+  "asset_id": "beacon",
+  "asset_type": "prop",
+  "baseline_y": 6,
+  "events": {
+    "spin": [
+      [
+        "tick"
+      ],
+      []
+    ]
+  },
+  "import_settings": {
+    "compress_mode": "lossless",
+    "filter": "nearest",
+    "fix_alpha_border": false,
+    "mipmaps": false
+  },
+  "manifest_version": 1,
+  "pivots": {
+    "front": [
+      4,
+      7
+    ]
+  },
+  "procedural": {
+    "spin": {
+      "params": {
+        "speed": 1.5
+      },
+      "shader": "glow_pulse",
+      "target_region": "vane"
+    }
+  },
+  "spec_hash": "x",
+  "sprite_frames": {
+    "spin_front": {
+      "frames": [
+        {
+          "duration_ms": 100,
+          "rect": {
+            "h": 8,
+            "w": 8,
+            "x": 0,
+            "y": 0
+          }
+        },
+        {
+          "duration_ms": 100,
+          "rect": {
+            "h": 8,
+            "w": 8,
+            "x": 8,
+            "y": 0
+          }
+        }
+      ],
+      "loop": true
+    }
+  },
+  "textures": {
+    "atlas": "beacon/atlas.png"
+  },
+  "tileset": null
+}

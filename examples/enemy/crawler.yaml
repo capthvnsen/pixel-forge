@@ -1,0 +1,164 @@
+# Pixel Asset Forge example: a two-direction "crawler" enemy with a combat block.
+#
+# Demonstrates: asset.type == enemy, the combat block (telegraph/death animation
+# names + hit_frames), events on meaningful frames (telegraph_start, hitbox_on,
+# hitbox_off, death_complete), a mirrored direction (west <- east), and
+# color_swap / scale_size / visible region-transform features.
+schema_version: 1
+
+asset:
+  id: crawler
+  type: enemy
+  canvas: [64, 64]
+  perspective: three_quarter_top_down
+  logical_pixel_scale: 1
+  # The shadow region is never offset and always visible, so it fixes the
+  # frame's lowest opaque row at 40 in every animation/direction (ANI001).
+  baseline_y: 40
+
+palette:
+  id: crawler_palette
+  colors:
+    - { id: shadow, hex: "#000000" }
+    - { id: body_main, hex: "#4a6b3a" }
+    - { id: leg_color, hex: "#2f4527" }
+    - { id: eye_color, hex: "#d94f4f" }
+    - { id: eye_warn, hex: "#ffcc33" }
+    - { id: dead_color, hex: "#5a4a4a" }
+    - { id: impact_flash, hex: "#f2f2f2" }
+
+directions: [east, west]
+# west is never hand-authored: it is produced by mirroring the east frames.
+mirror:
+  west: east
+
+anchors:
+  ground: [32, 40]
+  core: [32, 30]
+  eye: [37, 29]
+
+regions:
+  # Flat ground shadow. Never offset by any frame, so it always contributes
+  # the frame's lowest opaque row (world y=40) -> ANI001-safe.
+  shadow:
+    anchor: ground
+    layer: 0
+    shapes:
+      - { op: ellipse, color: shadow, at: [-9, -1], size: [18, 2] }
+
+  # Shell + four stub legs, one region so a "move" bob offsets everything
+  # together. All leg rows stay at y<=39, one row above the shadow's y=40,
+  # so a -1px bob never disturbs the measured baseline.
+  body:
+    anchor: core
+    layer: 10
+    shapes:
+      - { op: ellipse, color: body_main, at: [-10, -8], size: [20, 16] }
+      - { op: rect, color: leg_color, at: [-14, 6], size: [4, 4] } # front-left
+      - { op: rect, color: leg_color, at: [10, 6], size: [4, 4] } # front-right
+      - { op: rect, color: leg_color, at: [-14, -2], size: [4, 4] } # back-left
+      - { op: rect, color: leg_color, at: [10, -2], size: [4, 4] } # back-right
+
+  # Single eye on the "front" (east) side; mirrors to the opposite side on
+  # west, which is exactly correct for a profile creature facing the mirror.
+  eye:
+    anchor: eye
+    layer: 20
+    shapes:
+      - { op: ellipse, color: eye_color, at: [-2, -2], size: [4, 4] }
+
+animations:
+  idle:
+    loop: true
+    frames:
+      - { duration_ms: 150, transforms: {} }
+      # subtle breathing: grow the eye by 1px (no offsets, no drift risk)
+      - { duration_ms: 150, transforms: { eye: { scale_size: [1, 1] } } }
+
+  move:
+    loop: true
+    frames:
+      # crawl bob: whole body region shifts up 1px on alternating frames.
+      # Y-only offset keeps the frame bbox centre-x fixed (ANI003-safe).
+      - { duration_ms: 100, transforms: { body: { offset: [0, 0] } } }
+      - { duration_ms: 100, transforms: { body: { offset: [0, -1] } } }
+      - { duration_ms: 100, transforms: { body: { offset: [0, 0] } } }
+      - { duration_ms: 100, transforms: { body: { offset: [0, -1] } } }
+
+  telegraph:
+    loop: false
+    frames:
+      - duration_ms: 200
+        events: [telegraph_start]
+        transforms:
+          eye: { color_swap: { eye_color: eye_warn } }
+      - duration_ms: 200
+        transforms:
+          eye: { color_swap: { eye_color: eye_warn }, scale_size: [2, 2] }
+
+  attack:
+    loop: false
+    frames:
+      - duration_ms: 90
+        transforms:
+          eye: { color_swap: { eye_color: eye_warn } }
+      - duration_ms: 90
+        transforms:
+          eye: { color_swap: { eye_color: eye_warn } }
+      # combat.hit_frames.attack references index 2: the hitbox opens here.
+      - duration_ms: 90
+        events: [hitbox_on]
+        transforms:
+          eye: { color_swap: { eye_color: eye_warn } }
+      - duration_ms: 90
+        events: [hitbox_off]
+        transforms:
+          eye: { color_swap: { eye_color: eye_warn } }
+
+  impact:
+    loop: false
+    frames:
+      - duration_ms: 100
+        transforms:
+          body: { color_swap: { body_main: impact_flash } }
+      - duration_ms: 100
+        transforms: {}
+
+  death:
+    loop: false
+    frames:
+      - duration_ms: 150
+        transforms: {}
+      - duration_ms: 150
+        transforms:
+          body: { color_swap: { body_main: dead_color } }
+          eye: { visible: false }
+      - duration_ms: 150
+        transforms:
+          body: { color_swap: { body_main: dead_color } }
+          eye: { visible: false }
+      - duration_ms: 150
+        events: [death_complete]
+        transforms:
+          body: { color_swap: { body_main: dead_color } }
+          eye: { visible: false }
+
+combat:
+  telegraph_animation: telegraph
+  death_animation: death
+  hit_frames:
+    attack: [2]
+
+export:
+  sheet_columns: 4
+  preview_format: gif
+  preview_loop: true
+  godot: true
+
+validation:
+  palette_limit: 24
+  require_stable_baseline: true
+  require_stable_anchors: true
+  allow_antialiasing: false
+  max_seam_mismatch: 0
+  max_repeat_ratio: 0.6

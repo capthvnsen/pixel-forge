@@ -1,0 +1,138 @@
+{
+  "animation_player": null,
+  "asset_id": "forest",
+  "asset_type": "terrain",
+  "baseline_y": null,
+  "events": {},
+  "import_settings": {
+    "compress_mode": "lossless",
+    "filter": "nearest",
+    "fix_alpha_border": false,
+    "mipmaps": false
+  },
+  "manifest_version": 1,
+  "pivots": {},
+  "procedural": {},
+  "spec_hash": "x",
+  "sprite_frames": {},
+  "textures": {
+    "atlas": "forest/atlas.png"
+  },
+  "tileset": {
+    "animated_tiles": {
+      "water_flow": {
+        "frame_duration_ms": 150,
+        "frames": [
+          {
+            "tile_id": "grass",
+            "x": 1,
+            "y": 0
+          },
+          {
+            "tile_id": "dirt",
+            "x": 0,
+            "y": 0
+          }
+        ],
+        "loop": true
+      }
+    },
+    "atlas_source": "forest/atlas.png",
+    "collision_tiles": [
+      "dirt"
+    ],
+    "navigation_tiles": [
+      "dirt"
+    ],
+    "occlusion_tiles": [],
+    "sample_map": {
+      "layers": {
+        "ground": [
+          [
+            [
+              1,
+              0
+            ],
+            [
+              0,
+              0
+            ]
+          ],
+          [
+            [
+              0,
+              0
+            ],
+            [
+              1,
+              0
+            ]
+          ]
+        ]
+      },
+      "size": [
+        2,
+        2
+      ]
+    },
+    "terrain_bits": {
+      "dirt": {
+        "bottom_left_corner": "dirt",
+        "right_side": "dirt",
+        "top_right_corner": "dirt",
+        "top_side": "dirt"
+      }
+    },
+    "terrain_sets": {
+      "ground": {
+        "mode": "corners_and_edges",
+        "tiles": [
+          "grass",
+          "dirt"
+        ]
+      }
+    },
+    "tile_size": [
+      8,
+      8
+    ],
+    "tiles": [
+      {
+        "tile_id": "dirt",
+        "x": 0,
+        "y": 0
+      },
+      {
+        "tile_id": "grass",
+        "x": 1,
+        "y": 0
+      }
+    ],
+    "transitions": [
+      {
+        "from_terrain": "grass",
+        "mask": "N",
+        "tile_id": "dirt",
+        "to_terrain": "dirt"
+      },
+      {
+        "from_terrain": "grass",
+        "mask": "NE",
+        "tile_id": "dirt",
+        "to_terrain": "dirt"
+      },
+      {
+        "from_terrain": "grass",
+        "mask": "E",
+        "tile_id": "dirt",
+        "to_terrain": "dirt"
+      },
+      {
+        "from_terrain": "grass",
+        "mask": "SW",
+        "tile_id": "dirt",
+        "to_terrain": "dirt"
+      }
+    ]
+  }
+}

@@ -1,0 +1,170 @@
+# Pixel Asset Forge example: a four-direction sci-fi "engineer" character.
+#
+# Demonstrates: multi-region layering, anchors, mirrored direction (east <- west),
+# direction_overrides (weapon/backpack visibility differs on north), per-frame
+# region offsets driving a walk bob, and a non-looping attack animation with an
+# event on the contact frame.
+schema_version: 1
+
+asset:
+  id: engineer
+  type: character
+  canvas: [64, 64]
+  perspective: three_quarter_top_down
+  logical_pixel_scale: 1
+  # Lowest opaque row every frame must render to. Fixed by the shadow region,
+  # which is never offset, so ANI001 (baseline stability) holds automatically.
+  baseline_y: 57
+
+palette:
+  id: engineer_palette
+  # Kept deliberately small (5 of the 24-colour budget): one dominant suit
+  # colour, one shared metal tone for helmet/backpack/weapon, one glow
+  # accent, one gold accent, and the ground shadow. Every accent colour is
+  # placed with a margin inside its parent shape (see region comments below)
+  # so it never reaches the rendered silhouette's outer edge -- avoids
+  # PIX007's "minority edge colour" heuristic without needing a hand-drawn
+  # ink outline.
+  colors:
+    - { id: shadow, hex: "#000000" }
+    - { id: suit_main, hex: "#3a5a78" }
+    - { id: metal, hex: "#8a8f99" }
+    - { id: visor_glow, hex: "#7fe0e0" }
+    - { id: accent, hex: "#c9a227" }
+
+directions: [south, west, east, north]
+# east is never hand-authored: it is produced by mirroring the west frames.
+mirror:
+  east: west
+
+anchors:
+  feet: [32, 57]
+  torso: [32, 40]
+  head: [32, 14]
+  upper_back: [26, 24]
+  right_hand: [47, 42]
+
+regions:
+  # Flat ground shadow. Never offset by any frame/override, so it always
+  # contributes the frame's lowest opaque row (world y=57) -> ANI001-safe.
+  shadow:
+    anchor: feet
+    layer: 0
+    shapes:
+      - { op: ellipse, color: shadow, at: [-12, -2], size: [24, 3] }
+
+  # Backpack, worn behind the torso. Hidden on south/west (camera sees the
+  # front) and shown on north (camera sees the back) via direction_overrides.
+  backpack:
+    anchor: upper_back
+    layer: 10
+    shapes:
+      - { op: rect, color: metal, at: [-4, -2], size: [12, 20] }
+      # accent stripe: >=2px inset from the backpack rect's own edges on
+      # every side, so it never reaches the rendered silhouette boundary.
+      - { op: rect, color: accent, at: [-2, 4], size: [8, 3] }
+
+  # Torso, arms, legs -- one colour (suit_main), so the whole silhouette's
+  # dominant edge colour is unambiguous. Anchored to "torso" (not "feet"),
+  # so the walk bob can move this whole region vertically without
+  # disturbing the feet/shadow anchor that ANI002 checks.
+  body:
+    anchor: torso
+    layer: 20
+    shapes:
+      # legs (two separate rects, 1px gap at centre for readability)
+      - { op: rect, color: suit_main, at: [-8, 6], size: [8, 10] }
+      - { op: rect, color: suit_main, at: [1, 6], size: [8, 10] }
+      # torso
+      - { op: rect, color: suit_main, at: [-10, -14], size: [20, 20] }
+      # arms
+      - { op: rect, color: suit_main, at: [-16, -12], size: [6, 15] }
+      - { op: rect, color: suit_main, at: [10, -12], size: [6, 15] }
+
+  # Helmet + head. Anchored separately from the torso so it can stay put
+  # while the torso bobs during the walk cycle (an attachment point, per
+  # ANI004's "anchor other than feet" drift check).
+  helmet:
+    anchor: head
+    layer: 40
+    shapes:
+      - { op: ellipse, color: metal, at: [-9, -8], size: [18, 16] }
+      # visor: comfortably inside the dome ellipse on every side (the dome's
+      # semi-axes are 9x8; the visor sits within +/-6.5x, +/-1.5y of centre).
+      - { op: rect, color: visor_glow, at: [-6, -2], size: [12, 3] }
+
+  # Held tool/weapon, hidden entirely on north (back turned to camera).
+  weapon:
+    anchor: right_hand
+    layer: 50
+    shapes:
+      - { op: rect, color: metal, at: [0, -2], size: [3, 13] }
+      - { op: rect, color: metal, at: [-2, -6], size: [7, 6] }
+
+direction_overrides:
+  south:
+    backpack: { visible: false }
+  west:
+    backpack: { visible: false }
+  north:
+    weapon: { visible: false }
+    backpack: { visible: true }
+
+animations:
+  idle:
+    loop: true
+    frames:
+      # every frame sets "body" explicitly (even when the offset is [0, 0]),
+      # since ANI004 requires an explicit transform on any frame where a
+      # non-"feet" anchor's resolved position changes from the frame before.
+      - { duration_ms: 160, transforms: { body: { offset: [0, 0] } } }
+      - { duration_ms: 160, transforms: { body: { offset: [0, -1] } } }
+      - { duration_ms: 160, transforms: { body: { offset: [0, 0] } } }
+      - { duration_ms: 160, transforms: { body: { offset: [0, -1] } } }
+
+  walk:
+    loop: true
+    frames:
+      # 4-frame leg/body bob: the torso-anchored "body" region moves up 1px
+      # on the "step" frames. Only the y offset changes, so the frame bbox
+      # centre-x never moves (ANI003-safe), and the feet/shadow region is
+      # untouched (ANI001/ANI002-safe).
+      - { duration_ms: 100, transforms: { body: { offset: [0, 0] } } }
+      - { duration_ms: 100, transforms: { body: { offset: [0, -1] } } }
+      - { duration_ms: 100, transforms: { body: { offset: [0, 0] } } }
+      - { duration_ms: 100, transforms: { body: { offset: [0, -1] } } }
+
+  attack:
+    loop: false
+    frames:
+      # wind-up: raise the weapon
+      - duration_ms: 120
+        transforms:
+          weapon: { offset: [0, -3] }
+      # strike: weapon comes down onto the contact frame
+      - duration_ms: 90
+        events: [contact]
+        transforms:
+          weapon: { offset: [0, 1] }
+      # follow-through
+      - duration_ms: 120
+        transforms:
+          weapon: { offset: [0, 0] }
+      # recovery, back to rest
+      - duration_ms: 140
+        transforms:
+          weapon: { offset: [0, 0] }
+
+export:
+  sheet_columns: 4
+  preview_format: gif
+  preview_loop: true
+  godot: true
+
+validation:
+  palette_limit: 24
+  require_stable_baseline: true
+  require_stable_anchors: true
+  allow_antialiasing: false
+  max_seam_mismatch: 0
+  max_repeat_ratio: 0.6

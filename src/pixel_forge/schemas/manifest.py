@@ -100,6 +100,25 @@ class GodotTerrainSetExport(BaseModel):
     tiles: list[str] = Field(default_factory=list)
 
 
+class GodotAnimatedTileExport(BaseModel):
+    """An animated tile as Godot consumes it: the atlas coords of each frame, in order."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    frames: list[GodotTileCoord] = Field(default_factory=list)
+    frame_duration_ms: int
+    loop: bool = True
+
+
+class GodotSampleMapExport(BaseModel):
+    """A demo TileMapLayer: each row holds one `[col, row]` atlas coord per cell."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    size: Vec2
+    layers: dict[str, list[list[Vec2]]] = Field(default_factory=dict)
+
+
 class GodotTileSetExport(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -108,6 +127,11 @@ class GodotTileSetExport(BaseModel):
     tiles: list[GodotTileCoord] = Field(default_factory=list)
     terrain_sets: dict[str, GodotTerrainSetExport] = Field(default_factory=dict)
     transitions: list[TransitionSpec] = Field(default_factory=list)
+    # tile id -> Godot 4 peering-bit name -> terrain name. Pre-resolved from `transitions`
+    # so the plugin never has to reimplement the edge-mask mapping table.
+    terrain_bits: dict[str, dict[str, str]] = Field(default_factory=dict)
+    animated_tiles: dict[str, GodotAnimatedTileExport] = Field(default_factory=dict)
+    sample_map: GodotSampleMapExport | None = None
     collision_tiles: list[str] = Field(default_factory=list)
     navigation_tiles: list[str] = Field(default_factory=list)
     occlusion_tiles: list[str] = Field(default_factory=list)
@@ -139,6 +163,8 @@ class GodotImportSettings(BaseModel):
 
     filter: Literal["nearest"] = "nearest"
     mipmaps: bool = False
+    compress_mode: Literal["lossless"] = "lossless"
+    fix_alpha_border: bool = False
 
 
 class GodotManifest(BaseModel):
@@ -147,6 +173,9 @@ class GodotManifest(BaseModel):
     manifest_version: Literal[1] = 1
     asset_id: str
     asset_type: AssetType
+    # Hash of the source spec this manifest was built from. The Godot plugin stores it
+    # alongside the generated resources so a reimport can tell whether anything changed.
+    spec_hash: str = ""
     textures: dict[str, str] = Field(default_factory=dict)  # logical name -> relative path
     sprite_frames: dict[str, SpriteFramesAnimation] = Field(default_factory=dict)
     pivots: dict[str, Vec2] = Field(default_factory=dict)

@@ -1,0 +1,170 @@
+# Pixel Asset Forge example: a sci-fi signal beacon (asset.type: prop).
+#
+# Demonstrates: a static base region that never moves, a separate "vane" region
+# driven purely by per-frame RegionTransform.offset (layered transform animation),
+# a "lamp" region driven by visible toggles + color_swap (genuine blink, not just
+# a colour change), a "glow" region left untouched by any per-frame data because
+# it is the target of a `procedural` shader block instead, and one `procedural:`
+# entry on the "active" animation.
+#
+# Layout note (why nothing here trips PIX/ANI rules): the base's own shapes only
+# ever occupy x=[10,22) y=[10,30). Every vane/lamp/glow shape -- across every
+# offset any frame ever applies -- stays inside x=[11,22) y=[0,10), i.e. strictly
+# above the base and never overlapping it. That's what makes the base region's
+# rendered pixels provably identical across every frame (nothing is ever drawn
+# on top of it) while the vane/lamp visibly change.
+schema_version: 1
+
+asset:
+  id: beacon
+  type: prop
+  canvas: [32, 32]
+  perspective: three_quarter_top_down
+  # No baseline_y: a beacon has no "feet" to plant on a ground line, and
+  # leaving it unset skips ANI001 entirely (it only fires when declared).
+
+palette:
+  id: beacon_palette
+  # 7 colours: 3 for the static metal base, 1 for the moving vane, 1 dim glow
+  # accent, and a bright/dim pair for the lamp's blink. No role/ramp tags are
+  # declared (PIX010's lighting-consistency heuristic only engages once a
+  # palette opts in via role/ramp, so it stays a no-op info-only check here).
+  colors:
+    - { id: steel_dark, hex: "#3a3f47" }
+    - { id: steel_mid, hex: "#5b6472" }
+    - { id: steel_light, hex: "#838f9e" }
+    - { id: vane_color, hex: "#c0c7cf" }
+    - { id: glow_dim, hex: "#1e5f6e" }
+    - { id: lamp_bright, hex: "#ff5a3c" }
+    - { id: lamp_dim, hex: "#7a2a1c" }
+
+directions: [south]
+
+anchors:
+  base_anchor: [0, 0]
+  vane_pivot: [16, 6]
+  lamp_anchor: [16, 2]
+  glow_anchor: [16, 2]
+
+regions:
+  # Static base: pedestal foot, stalk, and a domed cap. No animation ever
+  # references "base" in its transforms, so every frame renders it with the
+  # identity transform -- byte-identical pixels every time, by construction.
+  base:
+    anchor: base_anchor
+    layer: 0
+    shapes:
+      - { op: rect, color: steel_dark, at: [10, 24], size: [12, 6] } # foot
+      - { op: rect, color: steel_mid, at: [14, 14], size: [4, 10] } # stalk
+      - { op: ellipse, color: steel_light, at: [12, 10], size: [8, 6] } # dome cap
+
+  # Procedural halo: an unfilled ring so it frames the lamp without ever
+  # covering its footprint (a filled disc would paper over the lamp's own
+  # visible/invisible toggle below). Never given per-frame transforms of its
+  # own -- its motion (pulse/shimmer) is expressed as the `procedural` block
+  # on the "active" animation instead of as baked keyframes, the
+  # shader-animation contract the plan asks this example to demonstrate.
+  glow:
+    anchor: glow_anchor
+    layer: 4
+    shapes:
+      - { op: ellipse, color: glow_dim, at: [-3, -3], size: [7, 7], fill: false }
+
+  # Moving vane: a small crossbar + stem that swings left/right purely via
+  # RegionTransform.offset (no shape data changes between frames). Every
+  # frame's offset stays within x=[-3, 3], which keeps the crossbar's world
+  # x range inside [11, 22) -- i.e. inside the base's own x=[10, 22) span --
+  # so the overall silhouette bbox centre-x never moves (ANI003-safe)
+  # regardless of the swing.
+  vane:
+    anchor: vane_pivot
+    layer: 6
+    shapes:
+      - { op: rect, color: vane_color, at: [-2, 0], size: [5, 2] } # crossbar
+      - { op: line, color: vane_color, start: [0, 2], end: [0, 3] } # stem
+
+  # Blinking lamp: never offset (its anchor never moves, so ANI004 can't
+  # fire), just toggled visible/colour-swapped per frame -- a real on/off
+  # blink, not merely a colour change.
+  lamp:
+    anchor: lamp_anchor
+    layer: 10
+    shapes:
+      - { op: rect, color: lamp_bright, at: [-1, -1], size: [3, 3] }
+
+moving_regions: [vane]
+procedural_regions: [glow]
+
+animations:
+  # Slow pulse: the vane sways gently and the lamp dims/brightens via
+  # color_swap (it stays visible throughout -- "pulse", not "blink").
+  idle:
+    loop: true
+    frames:
+      # every frame sets "vane" explicitly (even at offset [0, 0]) since
+      # ANI004 requires an explicit transform on any frame where a
+      # non-"feet" anchor's resolved position changes from the frame before.
+      - duration_ms: 400
+        transforms:
+          vane: { offset: [-3, 0] }
+          lamp: { color_swap: { lamp_bright: lamp_dim } }
+      - duration_ms: 400
+        transforms:
+          vane: { offset: [0, 0] }
+      - duration_ms: 400
+        transforms:
+          vane: { offset: [3, 0] }
+          lamp: { color_swap: { lamp_bright: lamp_dim } }
+      - duration_ms: 400
+        transforms:
+          vane: { offset: [0, 0] }
+
+  # Fast spin + fast blink, plus the one procedural shader entry: an
+  # `energy_pulse` shader targeting the "glow" region, which this local
+  # renderer never executes (procedural effects are an exporter/runtime
+  # concern) but which must survive parsing intact.
+  active:
+    loop: true
+    procedural:
+      shader: energy_pulse
+      target_region: glow
+      params: { frequency_hz: 6.0, intensity: 0.8, base_color: glow_dim }
+    frames:
+      - duration_ms: 100
+        transforms:
+          vane: { offset: [-3, 0] }
+          lamp: { visible: true }
+      - duration_ms: 100
+        transforms:
+          vane: { offset: [-1, 0] }
+          lamp: { visible: false }
+      - duration_ms: 100
+        transforms:
+          vane: { offset: [1, 0] }
+          lamp: { visible: true }
+      - duration_ms: 100
+        transforms:
+          vane: { offset: [3, 0] }
+          lamp: { visible: false }
+      - duration_ms: 100
+        transforms:
+          vane: { offset: [1, 0] }
+          lamp: { visible: true }
+      - duration_ms: 100
+        transforms:
+          vane: { offset: [-1, 0] }
+          lamp: { visible: false }
+
+export:
+  sheet_columns: 6
+  preview_format: gif
+  preview_loop: true
+  godot: true
+
+validation:
+  palette_limit: 24
+  require_stable_baseline: true
+  require_stable_anchors: true
+  allow_antialiasing: false
+  max_seam_mismatch: 0
+  max_repeat_ratio: 0.6
