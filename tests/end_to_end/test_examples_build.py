@@ -21,7 +21,13 @@ from pixel_forge.schemas import GodotManifest
 
 EXAMPLES_ROOT = Path(__file__).resolve().parents[2] / "examples"
 
-_SPRITE_ASSETS = {"engineer": "character", "crawler": "enemy", "beacon": "prop"}
+_SPRITE_ASSETS = {
+    "engineer": "character",
+    "crawler": "enemy",
+    "beacon": "prop",
+    "sporeling": "enemy",
+    "rune_chest": "prop",
+}
 _TERRAIN_ASSET = "forest_tileset"
 _ALL_ASSETS = {*_SPRITE_ASSETS, _TERRAIN_ASSET}
 

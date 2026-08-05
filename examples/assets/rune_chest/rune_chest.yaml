@@ -1,0 +1,137 @@
+# Sample: "rune_chest", an animated environmental prop.
+#
+# Demonstrates the prop workflow: a static base that never moves, a separate
+# moving component (the lid) driven purely by per-frame region offsets, a
+# pulsing component driven by colour swaps, and one procedural shader effect
+# exported as Godot metadata rather than baked into frames.
+schema_version: 1
+
+asset:
+  id: rune_chest
+  type: prop
+  canvas: [32, 32]
+  perspective: three_quarter_top_down
+  logical_pixel_scale: 1
+  baseline_y: 27
+
+palette:
+  id: rune_chest_palette
+  colors:
+    - { id: shadow, hex: "#0a0a12" }
+    - { id: wood, hex: "#8a5a32" }
+    - { id: wood_dark, hex: "#5c3a20" }
+    - { id: iron, hex: "#6e7480" }
+    - { id: rune_dim, hex: "#3f7d6a" }
+    - { id: rune_bright, hex: "#6ef0c0" }
+
+directions: [south]
+
+anchors:
+  feet: [16, 27]
+  body: [16, 18]
+  lid: [16, 12]
+
+regions:
+  # Ground shadow: never transformed, so it fixes the frame's lowest opaque row.
+  shadow:
+    anchor: feet
+    layer: 0
+    shapes:
+      - { op: ellipse, color: shadow, at: [-11, -2], size: [22, 3] }
+
+  # Static base. Listed in no animation's transforms, so it is pixel-identical
+  # in every frame: that is what the prop test asserts.
+  base:
+    anchor: body
+    layer: 10
+    shapes:
+      - { op: rect, color: wood, at: [-10, -2], size: [20, 10] }
+      # iron banding, inset 2px from the base's own left/right edges
+      - { op: rect, color: iron, at: [-8, -2], size: [3, 10] }
+      - { op: rect, color: iron, at: [5, -2], size: [3, 10] }
+      - { op: rect, color: wood_dark, at: [-10, 6], size: [20, 2] }
+
+  # The moving component: lifts and tilts back as the chest opens.
+  lid:
+    anchor: lid
+    layer: 20
+    shapes:
+      - { op: rect, color: wood, at: [-10, -3], size: [20, 7] }
+      - { op: rect, color: wood_dark, at: [-10, 2], size: [20, 2] }
+      - { op: rect, color: iron, at: [-8, -3], size: [3, 7] }
+      - { op: rect, color: iron, at: [5, -3], size: [3, 7] }
+
+  # The pulsing component: a rune on the chest face, swapped between a dim and
+  # a bright palette entry rather than redrawn.
+  rune:
+    anchor: body
+    layer: 30
+    shapes:
+      - { op: ellipse, color: rune_dim, at: [-3, 0], size: [7, 6] }
+
+moving_regions: [lid]
+procedural_regions: [rune]
+
+animations:
+  # Closed and idle: the rune breathes, nothing else moves.
+  idle:
+    loop: true
+    # The glow itself is handed to Godot as a shader, not baked frame by frame.
+    procedural:
+      shader: energy_pulse
+      target_region: rune
+      params: { speed: 0.6, intensity: 0.35, hue_shift: 0.0 }
+    frames:
+      - { duration_ms: 260, transforms: { rune: { color_swap: { rune_dim: rune_dim } } } }
+      - { duration_ms: 260, transforms: { rune: { color_swap: { rune_dim: rune_bright } } } }
+      - { duration_ms: 260, transforms: { rune: { color_swap: { rune_dim: rune_bright } } } }
+      - { duration_ms: 260, transforms: { rune: { color_swap: { rune_dim: rune_dim } } } }
+
+  # Opening: the lid lifts clear of the base and tilts back, the rune flares.
+  opening:
+    loop: false
+    frames:
+      - {
+          duration_ms: 90,
+          events: [open_start],
+          transforms:
+            {
+              lid: { offset: [0, 0] },
+              rune: { color_swap: { rune_dim: rune_bright } },
+            },
+        }
+      - {
+          duration_ms: 90,
+          transforms:
+            {
+              lid: { offset: [0, -3] },
+              rune: { color_swap: { rune_dim: rune_bright } },
+            },
+        }
+      - {
+          duration_ms: 90,
+          transforms:
+            {
+              lid: { offset: [0, -6] },
+              rune: { color_swap: { rune_dim: rune_bright } },
+            },
+        }
+      - {
+          duration_ms: 220,
+          events: [open_complete],
+          transforms:
+            {
+              lid: { offset: [0, -10] },
+              rune: { color_swap: { rune_dim: rune_bright } },
+            },
+        }
+
+export:
+  preview_format: gif
+  preview_loop: true
+
+validation:
+  palette_limit: 24
+  require_stable_baseline: true
+  require_stable_anchors: true
+  allow_antialiasing: false

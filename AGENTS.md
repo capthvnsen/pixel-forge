@@ -352,14 +352,16 @@ Every filesystem path the CLI/MCP touches routes through `domain/paths.py`:
   itself before reporting a code change done — don't take "I edited the file" as
   evidence of a working change.
 
-## How to run the four MVP examples
+## How to run the MVP examples
 
 ```bash
 uv run pixel-forge build-all --root examples
 ```
 
-Builds `engineer` (character), `crawler` (enemy), `beacon` (prop), and
-`forest_tileset` (terrain) in one pass — render, preview, export, per asset. See each
+Builds `engineer` (character), `crawler` and `sporeling` (enemy), `beacon` and
+`rune_chest` (prop), and `forest_tileset` (terrain) in one pass — render, preview,
+export, per asset. The four MVP vertical slices are `engineer`, `crawler`, `beacon`
+and `forest_tileset`; `sporeling` and `rune_chest` are additional worked samples. See each
 asset's own `examples/assets/<name>/README.md` for what it's specifically designed to
 demonstrate, and `docs/validation.md` for why each asset's non-zero findings (all
 `warning`/`info`, never blocking) are expected rather than bugs.

@@ -187,31 +187,39 @@ the same spec produces byte-identical PNGs on every run and on every machine.
 
 Add `--json` before any subcommand for structured output instead of text.
 
-## The four worked examples
+## The worked examples
 
-`examples/` is a real, buildable project with one worked spec per asset type:
+`examples/` is a real, buildable project covering every asset type. See
+[`examples/README.md`](examples/README.md) for the gallery with rendered previews.
 
 - **`engineer`** (character): four directions with east mirrored from west, idle, walk
   and attack, stable feet, attachment anchors, per-direction equipment visibility.
 - **`crawler`** (enemy): idle, move, telegraph, attack, impact, death, with frame
   events for hitboxes and combat metadata.
+- **`sporeling`** (enemy): the full combat state machine across three directions, 60
+  frames, squash-and-stretch through size deltas, events on the frames that matter.
 - **`beacon`** (prop): a static base, a moving vane, a blinking lamp, and one
   procedural shader effect exported as Godot metadata.
+- **`rune_chest`** (prop): a pixel-identical static base, a lid animated purely by
+  region offsets, and a rune that pulses via palette swaps plus a shader block.
 - **`forest_tileset`** (terrain): grass, dirt, all eight transition masks, animated
   water, adjacency metadata, seam tests, and a sample map.
 
-Each has its own README explaining what it demonstrates.
+Each has its own README explaining what it demonstrates and why its remaining warnings
+are expected.
 
 ```bash
 uv run pixel-forge build-all --root examples
 ```
 
 ```
-built 4 asset(s), 16 finding(s) total
+built 6 asset(s), 146 finding(s) total
   beacon: ok
   crawler: ok
   engineer: ok
   forest_tileset: ok
+  rune_chest: ok
+  sporeling: ok
 ```
 
 ## Importing into Godot
@@ -286,7 +294,7 @@ Stated honestly, read against the code:
 
 - **Heuristic validation rules are untuned against real art.** `PIX006` through
   `PIX010`, `ANI005`, `ANI006`, `ANI008`, and `TIL007` use thresholds chosen to pass
-  the four shipped examples cleanly, not validated against a broad corpus of
+  the shipped examples cleanly, not validated against a broad corpus of
   hand-drawn pixel art. Expect false positives on busy or organic art and false
   negatives on subtler mistakes. Full rule table: `docs/validation.md`.
 - **The only render backend is the local deterministic shape-DSL renderer.**
