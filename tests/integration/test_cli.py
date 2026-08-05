@@ -10,6 +10,7 @@ import json
 from pathlib import Path
 
 import yaml
+from PIL import Image
 from typer.testing import CliRunner, Result
 
 from pixel_forge import __version__, templates
@@ -316,6 +317,69 @@ def test_assets_prefix_and_bare_id_resolve_to_the_same_asset(tmp_path: Path) -> 
     assert bare.exit_code == 0
     assert prefixed.exit_code == 0
     assert json.loads(bare.stdout) == json.loads(prefixed.stdout)
+
+
+# --- import-region / extract-palette / view / contact -------------------------------------------
+
+
+def test_import_region_extract_palette_view_and_contact_exit_zero_and_json_parses(
+    tmp_path: Path,
+) -> None:
+    root = _init(tmp_path)
+    assert _invoke("new", "character", "hero", "--root", str(root)).exit_code == 0
+    png_path = root / "sprite.png"
+    Image.new("RGBA", (2, 2), (0x20, 0x20, 0x20, 255)).save(png_path)  # matches "ink" exactly
+
+    import_result = _invoke(
+        "--json", "import-region", "hero", "block", "--from", "sprite.png", "--root", str(root)
+    )
+    assert import_result.exit_code == 0, import_result.output
+    import_payload = json.loads(import_result.stdout)
+    assert import_payload["asset_id"] == "hero"
+    assert import_payload["unmatched"] == {}
+
+    extract_result = _invoke(
+        "--json", "extract-palette", "--from", "sprite.png", "--root", str(root)
+    )
+    assert extract_result.exit_code == 0, extract_result.output
+    palette_payload = json.loads(extract_result.stdout)
+    assert palette_payload["colors"]
+
+    view_result = _invoke(
+        "view", "hero", "--animation", "idle", "--direction", "south", "--root", str(root)
+    )
+    assert view_result.exit_code == 0, view_result.output
+    assert any((root / "build" / "hero").glob("view_idle_south_0.png"))
+
+    contact_result = _invoke("contact", "hero", "--root", str(root))
+    assert contact_result.exit_code == 0, contact_result.output
+    assert (root / "build" / "hero" / "hero_contact_view.png").is_file()
+
+    annotated_result = _invoke("--json", "contact", "hero", "--annotate", "--root", str(root))
+    assert annotated_result.exit_code == 0, annotated_result.output
+    annotated_payload = json.loads(annotated_result.stdout)
+    assert annotated_payload["path"] == "build/hero/hero_annotated.png"
+
+
+def test_import_region_direction_exits_three(tmp_path: Path) -> None:
+    root = _init(tmp_path)
+    assert _invoke("new", "character", "hero", "--root", str(root)).exit_code == 0
+    png_path = root / "sprite.png"
+    Image.new("RGBA", (2, 2), (0x20, 0x20, 0x20, 255)).save(png_path)
+
+    result = _invoke(
+        "import-region",
+        "hero",
+        "block",
+        "--from",
+        "sprite.png",
+        "--direction",
+        "south",
+        "--root",
+        str(root),
+    )
+    assert result.exit_code == 3
+    assert "direction" in result.stderr
 
 
 # --- build-all ------------------------------------------------------------------------------------

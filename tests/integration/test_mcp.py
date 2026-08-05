@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 from mcp.shared.exceptions import MCPError
 from mcp_types import INVALID_PARAMS
+from PIL import Image
 
 from pixel_forge import api
 from pixel_forge.mcp import server
@@ -20,6 +21,7 @@ from pixel_forge.schemas import (
     AssetType,
     GodotManifest,
     OperationSpec,
+    Palette,
     ProjectConfig,
     ProvenanceEntry,
     RevisionRecord,
@@ -42,6 +44,10 @@ EXPECTED_TOOL_NAMES = {
     "generate_preview",
     "export_asset_to_godot",
     "build_asset_family",
+    "import_region",
+    "extract_palette",
+    "render_view",
+    "render_annotated_contact",
     "get_validation_report",
     "compare_revisions",
     "list_revisions",
@@ -309,6 +315,51 @@ def test_update_asset_spec_rejects_schema_invalid_document(tmp_path: Path) -> No
         server.update_asset_spec(asset_id="hero", spec=spec, timestamp="2026-08-05T12:00:00Z")
 
 
+# --- bitmap import / vision loop ------------------------------------------------------------------
+
+
+def test_import_region_extract_palette_render_view_and_contact_round_trip(tmp_path: Path) -> None:
+    root = _init(tmp_path)
+    server.create_asset(asset_type="character", asset_id="hero")
+    png_path = root / "sprite.png"
+    Image.new("RGBA", (2, 2), (0x20, 0x20, 0x20, 255)).save(png_path)  # matches "ink" exactly
+
+    result = server.import_region(
+        asset_id="hero", region="block", png_path="sprite.png", timestamp="2026-08-05T12:00:00Z"
+    )
+    assert isinstance(result, api.ImportResult)
+    assert result.unmatched == {}
+    assert result.revision.operation.name == "replace_spec"
+
+    palette = server.extract_palette(png_path="sprite.png")
+    assert isinstance(palette, Palette)
+    assert palette.colors
+
+    view = server.render_view(asset_id="hero", animation="idle", direction="south")
+    assert isinstance(view, api.ViewResult)
+    assert (root / view.path).is_file()
+
+    contact = server.render_annotated_contact(asset_id="hero")
+    assert isinstance(contact, api.ViewResult)
+    assert (root / contact.path).is_file()
+
+
+def test_import_region_direction_raises_structured_error(tmp_path: Path) -> None:
+    root = _init(tmp_path)
+    server.create_asset(asset_type="character", asset_id="hero")
+    Image.new("RGBA", (2, 2), (0x20, 0x20, 0x20, 255)).save(root / "sprite.png")
+
+    with pytest.raises(MCPError) as exc_info:
+        server.import_region(
+            asset_id="hero",
+            region="block",
+            png_path="sprite.png",
+            timestamp="t",
+            direction="south",
+        )
+    assert "direction" in exc_info.value.message
+
+
 # --- seams / references / style profile --------------------------------------------------------
 
 
@@ -367,11 +418,12 @@ def test_missing_asset_id_returns_structured_error_not_a_raw_exception(tmp_path:
 
 
 def test_hostile_asset_id_rejected_by_every_tool_that_takes_one(tmp_path: Path) -> None:
-    _init(tmp_path)
+    root = _init(tmp_path)
     server.create_asset(asset_type="character", asset_id="hero")
     hostile = "../evil"
     op = OperationSpec(name="translate_region", params={"region": "block", "offset": [1, 0]})
     spec = server.get_asset(asset_id="hero").model_dump(mode="json")
+    Image.new("RGBA", (2, 2), (0x20, 0x20, 0x20, 255)).save(root / "sprite.png")
 
     calls: list[Callable[[], object]] = [
         lambda: server.get_asset(asset_id=hostile),
@@ -387,6 +439,11 @@ def test_hostile_asset_id_rejected_by_every_tool_that_takes_one(tmp_path: Path) 
         lambda: server.list_revisions(asset_id=hostile),
         lambda: server.inspect_asset(asset_id=hostile),
         lambda: server.test_seams(asset_id=hostile),
+        lambda: server.import_region(
+            asset_id=hostile, region="block", png_path="sprite.png", timestamp="t"
+        ),
+        lambda: server.render_view(asset_id=hostile, animation="idle", direction="south"),
+        lambda: server.render_annotated_contact(asset_id=hostile),
     ]
     for call in calls:
         with pytest.raises(MCPError):

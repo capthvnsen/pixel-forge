@@ -7,13 +7,16 @@ is authored by another agent concurrently and must not be a runtime dependency h
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import TYPE_CHECKING
 
 from pixel_forge.errors import RenderError
 from pixel_forge.rendering.canvas import RGBA, Canvas, Vec2
 
 if TYPE_CHECKING:
-    from pixel_forge.schemas.common import Shape
+    from pixel_forge.schemas.common import BitmapShape, Shape
+
+_TRANSPARENT = (".", " ")
 
 
 def _offset(point: Vec2, origin: Vec2) -> Vec2:
@@ -46,8 +49,36 @@ def draw_shape(canvas: Canvas, shape: Shape, origin: Vec2, rgba: RGBA) -> None:
         size = getattr(shape, "size")  # noqa: B009
         fill = getattr(shape, "fill")  # noqa: B009
         canvas.draw_ellipse(_offset(at, origin), size, rgba, fill)
+    elif op == "bitmap":
+        raise RenderError(
+            "bitmap shapes carry many colours and must be drawn with draw_bitmap(), not "
+            "draw_shape()"
+        )
     else:
         raise RenderError(f"unknown shape op: {op!r}")
+
+
+def draw_bitmap(
+    canvas: Canvas, shape: BitmapShape, origin: Vec2, colors: Mapping[str, RGBA]
+) -> None:
+    """Draw a bitmap shape row by row, `shape.at` offset by `origin`.
+
+    `colors` maps each `key` character directly to its resolved RGBA (i.e. `shape.key` with
+    its palette-id values already looked up by the caller). `.` and space are transparent
+    and are skipped entirely rather than drawn, so they never erase whatever is already on
+    `canvas` beneath them. Out-of-bounds pixels clip silently via `Canvas.set_pixel`.
+    """
+    ax, ay = _offset(shape.at, origin)
+    for row_index, row in enumerate(shape.rows):
+        for col_index, char in enumerate(row):
+            if char in _TRANSPARENT:
+                continue
+            canvas.set_pixel(ax + col_index, ay + row_index, colors[char])
+
+
+def bitmap_size(shape: BitmapShape) -> Vec2:
+    """The (width, height) of `shape`'s pixel grid, ignoring `at`."""
+    return (len(shape.rows[0]), len(shape.rows))
 
 
 def shape_bounds(shape: Shape, origin: Vec2) -> tuple[int, int, int, int]:
@@ -66,4 +97,8 @@ def shape_bounds(shape: Shape, origin: Vec2) -> tuple[int, int, int, int]:
         x, y = _offset(getattr(shape, "at"), origin)  # noqa: B009
         w, h = getattr(shape, "size")  # noqa: B009
         return (x, y, x + max(w, 0), y + max(h, 0))
+    if op == "bitmap":
+        x, y = _offset(getattr(shape, "at"), origin)  # noqa: B009
+        rows: list[str] = getattr(shape, "rows")  # noqa: B009
+        return (x, y, x + len(rows[0]), y + len(rows))
     raise RenderError(f"unknown shape op: {op!r}")

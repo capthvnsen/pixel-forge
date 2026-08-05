@@ -28,6 +28,7 @@ def _doc(
     animations: dict[str, Any] | None = None,
     palette_colors: list[dict[str, Any]] | None = None,
     validation: dict[str, Any] | None = None,
+    regions: dict[str, Any] | None = None,
 ) -> CharacterAsset:
     if directions is None:
         directions = ["south"]
@@ -37,6 +38,8 @@ def _doc(
         }
     if palette_colors is None:
         palette_colors = [{"id": "red", "hex": "#ff0000"}, {"id": "black", "hex": "#000000"}]
+    if regions is None:
+        regions = {"body": {"anchor": "root", "layer": 0, "shapes": []}}
     data = {
         "schema_version": 1,
         "asset": {
@@ -50,7 +53,7 @@ def _doc(
         "directions": directions,
         "mirror": {},
         "anchors": {"root": [0, 0]},
-        "regions": {"body": {"anchor": "root", "layer": 0, "shapes": []}},
+        "regions": regions,
         "direction_overrides": {},
         "animations": animations,
         "export": {},
@@ -341,6 +344,82 @@ def test_pix010_does_not_fire_on_consistent_shadow_direction() -> None:
     frame1 = _canvas(6, 6, {(0, 0): RED, (5, 5): BLUE})
     ctx = _ctx(doc, {("idle", "south", 0): frame0, ("idle", "south", 1): frame1})
     report = run_validation(ctx, only=["PIX010"])
+    assert report.findings == []
+
+
+# ---- PIX011: bitmap key references an unknown palette id --------------------------
+
+
+def test_pix011_fires_on_unknown_palette_id_in_bitmap_key() -> None:
+    doc = _doc(
+        regions={
+            "body": {
+                "anchor": "root",
+                "layer": 0,
+                "shapes": [
+                    {"op": "bitmap", "at": [0, 0], "key": {"o": "not_a_color"}, "rows": ["o"]}
+                ],
+            }
+        }
+    )
+    ctx = _ctx(doc, {})
+    report = run_validation(ctx, only=["PIX011"])
+    assert len(report.findings) == 1
+    assert report.findings[0].rule_id == "PIX011"
+    assert report.findings[0].severity == "error"
+    assert report.findings[0].measurements["char"] == "o"
+    assert report.findings[0].measurements["color_id"] == "not_a_color"
+
+
+def test_pix011_does_not_fire_on_known_palette_id_in_bitmap_key() -> None:
+    doc = _doc(
+        regions={
+            "body": {
+                "anchor": "root",
+                "layer": 0,
+                "shapes": [{"op": "bitmap", "at": [0, 0], "key": {"o": "black"}, "rows": ["o"]}],
+            }
+        }
+    )
+    ctx = _ctx(doc, {})
+    report = run_validation(ctx, only=["PIX011"])
+    assert report.findings == []
+
+
+# ---- PIX012: flat-shading heuristic for bitmap art (heuristic) --------------------
+
+
+_SKIN_RAMP = [
+    {"id": "skin_light", "hex": "#ffcc99", "ramp": "skin"},
+    {"id": "skin_dark", "hex": "#cc9966", "ramp": "skin"},
+]
+
+
+def _bitmap_region(rows: list[str]) -> dict[str, Any]:
+    return {
+        "anchor": "root",
+        "layer": 0,
+        "shapes": [{"op": "bitmap", "at": [0, 0], "key": {"l": "skin_light"}, "rows": rows}],
+    }
+
+
+def test_pix012_fires_on_large_flat_material() -> None:
+    doc = _doc(palette_colors=_SKIN_RAMP, regions={"body": _bitmap_region(["l" * 8] * 8)})
+    ctx = _ctx(doc, {})
+    report = run_validation(ctx, only=["PIX012"])
+    assert len(report.findings) == 1
+    assert report.findings[0].rule_id == "PIX012"
+    assert report.findings[0].severity == "warning"
+    assert report.findings[0].measurements["ramp"] == "skin"
+    assert report.findings[0].measurements["area_px"] == 64
+
+
+def test_pix012_does_not_fire_on_small_flat_area() -> None:
+    # A small flat patch (e.g. a shadow sliver) is a legitimate use of a single shade
+    # and must not be flagged, even though it's still just one colour from the ramp.
+    doc = _doc(palette_colors=_SKIN_RAMP, regions={"body": _bitmap_region(["l" * 4] * 4)})
+    ctx = _ctx(doc, {})
+    report = run_validation(ctx, only=["PIX012"])
     assert report.findings == []
 
 

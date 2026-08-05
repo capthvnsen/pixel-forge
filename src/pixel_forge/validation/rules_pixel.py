@@ -12,7 +12,7 @@ from numpy.typing import NDArray
 from pixel_forge.domain.palette import ResolvedPalette, hex_to_rgba, rgba_to_hex
 from pixel_forge.domain.palette import check_palette_limit as _check_palette_limit
 from pixel_forge.rendering.canvas import RGBA, Canvas
-from pixel_forge.schemas import Finding
+from pixel_forge.schemas import BitmapShape, Finding, SpriteAssetBase
 from pixel_forge.validation.engine import RuleContext, make_finding, register
 
 _SPRITE_TYPES = ("character", "enemy", "prop")
@@ -545,3 +545,127 @@ def _pix010(ctx: RuleContext) -> list[Finding]:
             measurements={"directions": ",".join(sorted(buckets)), "frames_considered": considered},
         )
     ]
+
+
+@register(
+    "PIX011",
+    severity="error",
+    kind="deterministic",
+    applies_to=_SPRITE_TYPES,
+    description=(
+        "A bitmap shape's `key` must map every character to a palette colour id that "
+        "actually exists in the doc's palette. Render time only discovers this as a crashing "
+        "PaletteError; this rule reports it as a normal finding instead."
+    ),
+)
+def _pix011(ctx: RuleContext) -> list[Finding]:
+    if not isinstance(ctx.doc, SpriteAssetBase):
+        return []
+    findings = []
+    for region_name in sorted(ctx.doc.regions):
+        for shape in ctx.doc.regions[region_name].shapes:
+            if not isinstance(shape, BitmapShape):
+                continue
+            for char in sorted(shape.key):
+                color_id = shape.key[char]
+                if color_id in ctx.palette.ids:
+                    continue
+                findings.append(
+                    make_finding(
+                        ctx,
+                        "PIX011",
+                        "error",
+                        "deterministic",
+                        region=region_name,
+                        message=(
+                            f"bitmap in region {region_name!r} maps key char {char!r} to "
+                            f"{color_id!r}, which is not a colour in palette "
+                            f"{ctx.palette.palette.id!r}"
+                        ),
+                        remediation=(
+                            f"point key {char!r} at an existing palette colour id, or add "
+                            f"{color_id!r} to the palette"
+                        ),
+                        measurements={"region": region_name, "char": char, "color_id": color_id},
+                    )
+                )
+    return findings
+
+
+# A material's shaded area must clear this many pixels before PIX012 treats a single shade as
+# a quality problem rather than a legitimately flat small detail (a shadow sliver, a highlight
+# speck, ...).
+_PIX012_MIN_MATERIAL_AREA_PX = 32
+
+
+@register(
+    "PIX012",
+    severity="warning",
+    kind="heuristic",
+    applies_to=_SPRITE_TYPES,
+    description=(
+        "Flat-shading heuristic for bitmap art: palette colours that share a `ramp` id are "
+        "the shades of one material. For every ramp with 2+ declared colours, sum the pixel "
+        "area across a region's bitmap shapes that use any colour from that ramp. If that "
+        "area exceeds PIX012_MIN_MATERIAL_AREA_PX but fewer than 2 distinct colours from the "
+        "ramp are actually used, the region is flagged: a large surface painted in a single "
+        "flat shade despite having a ramp to shade it with. Colours with no declared ramp are "
+        "not considered, so flat outlines/accents never trip this rule."
+    ),
+)
+def _pix012(ctx: RuleContext) -> list[Finding]:
+    if not isinstance(ctx.doc, SpriteAssetBase):
+        return []
+    ramp_by_color: dict[str, str] = {
+        color.id: color.ramp for color in ctx.palette.palette.colors if color.ramp is not None
+    }
+    ramp_sizes: dict[str, int] = {}
+    for ramp in ramp_by_color.values():
+        ramp_sizes[ramp] = ramp_sizes.get(ramp, 0) + 1
+
+    findings = []
+    for region_name in sorted(ctx.doc.regions):
+        area_by_ramp: dict[str, int] = {}
+        colors_used_by_ramp: dict[str, set[str]] = {}
+        for shape in ctx.doc.regions[region_name].shapes:
+            if not isinstance(shape, BitmapShape):
+                continue
+            for row in shape.rows:
+                for char in row:
+                    if char in (".", " "):
+                        continue
+                    color_id = shape.key[char]
+                    char_ramp = ramp_by_color.get(color_id)
+                    if char_ramp is None or ramp_sizes[char_ramp] < 2:
+                        continue
+                    area_by_ramp[char_ramp] = area_by_ramp.get(char_ramp, 0) + 1
+                    colors_used_by_ramp.setdefault(char_ramp, set()).add(color_id)
+        for ramp in sorted(area_by_ramp):
+            area = area_by_ramp[ramp]
+            distinct = len(colors_used_by_ramp[ramp])
+            if area > _PIX012_MIN_MATERIAL_AREA_PX and distinct < 2:
+                findings.append(
+                    make_finding(
+                        ctx,
+                        "PIX012",
+                        "warning",
+                        "heuristic",
+                        region=region_name,
+                        message=(
+                            f"region {region_name!r} covers {area}px of material {ramp!r} with "
+                            f"only {distinct} distinct colour(s) from that ramp; flat, unshaded art"
+                        ),
+                        remediation=(
+                            f"use more than one colour from the {ramp!r} ramp to shade this "
+                            "surface (light/mid/shadow), or re-author with a tonal ramp"
+                        ),
+                        measurements={
+                            "region": region_name,
+                            "ramp": ramp,
+                            "area_px": area,
+                            "distinct_colors_used": distinct,
+                            "min_area_px": _PIX012_MIN_MATERIAL_AREA_PX,
+                        },
+                    )
+                )
+    return findings

@@ -27,6 +27,7 @@ _SPRITE_ASSETS = {
     "beacon": "prop",
     "sporeling": "enemy",
     "rune_chest": "prop",
+    "vanguard": "character",
 }
 _TERRAIN_ASSET = "forest_tileset"
 _ALL_ASSETS = {*_SPRITE_ASSETS, _TERRAIN_ASSET}

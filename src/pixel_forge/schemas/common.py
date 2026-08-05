@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 Vec2 = tuple[int, int]
 RGBA = tuple[int, int, int, int]
@@ -44,8 +44,67 @@ class EllipseShape(ShapeBase):
     fill: bool = True
 
 
+_TRANSPARENT = (".", " ")
+
+
+class BitmapShape(BaseModel):
+    """A region of palette-indexed pixel data, one character per pixel.
+
+    Carries many colours via `key` rather than the single `color` every other shape has,
+    so it does not inherit `ShapeBase`. `.` and a space are always transparent and must not
+    appear in `key`.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    op: Literal["bitmap"]
+    at: Vec2
+    key: dict[str, str]
+    rows: list[str]
+
+    @model_validator(mode="after")
+    def _check_rows_and_key(self) -> BitmapShape:
+        if not self.rows:
+            raise ValueError("bitmap must have at least one row")
+        for i, row in enumerate(self.rows):
+            if not row:
+                raise ValueError(f"bitmap row {i} is empty")
+        width = len(self.rows[0])
+        for i, row in enumerate(self.rows):
+            if len(row) != width:
+                raise ValueError(
+                    f"bitmap row {i} has length {len(row)}, expected {width} "
+                    "(rows must not be ragged)"
+                )
+        for char in self.key:
+            if len(char) != 1:
+                raise ValueError(f"bitmap key {char!r} must be exactly one character")
+            if char in _TRANSPARENT:
+                raise ValueError(f"bitmap key {char!r} is reserved for transparency")
+        used: set[str] = set()
+        for i, row in enumerate(self.rows):
+            for char in row:
+                if char in _TRANSPARENT:
+                    continue
+                if char not in self.key:
+                    raise ValueError(f"bitmap row {i} uses char {char!r} not present in key")
+                used.add(char)
+        unused = set(self.key) - used
+        if unused:
+            raise ValueError(f"bitmap key entries unused by any row: {sorted(unused)}")
+        return self
+
+    @property
+    def width(self) -> int:
+        return len(self.rows[0])
+
+    @property
+    def height(self) -> int:
+        return len(self.rows)
+
+
 Shape = Annotated[
-    PixelShape | LineShape | RectShape | EllipseShape,
+    PixelShape | LineShape | RectShape | EllipseShape | BitmapShape,
     Field(discriminator="op"),
 ]
 

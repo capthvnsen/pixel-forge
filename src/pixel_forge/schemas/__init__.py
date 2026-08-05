@@ -31,6 +31,7 @@ from pixel_forge.schemas.asset import (
 from pixel_forge.schemas.common import (
     RGBA,
     Anchor,
+    BitmapShape,
     EllipseShape,
     LineShape,
     PixelShape,
@@ -89,6 +90,7 @@ __all__ = [
     "AssetType",
     "AtlasRect",
     "BaseAssetDoc",
+    "BitmapShape",
     "CharacterAsset",
     "EllipseShape",
     "EnemyAsset",

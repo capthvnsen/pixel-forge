@@ -73,6 +73,34 @@ def make_doc() -> CharacterAsset:
     )
 
 
+def make_doc_with_bitmap() -> CharacterAsset:
+    """`make_doc()` plus two extra regions carrying `bitmap` shapes.
+
+    `ink` is bitmap-only (recolor/translate/resize-bitmap-only tests); `mixed`
+    combines a rect with a bitmap (resize-mixed test). Kept separate from
+    `make_doc()` so existing tests' shape-index assumptions (e.g. `shapes[0]`)
+    stay untouched.
+    """
+    doc = make_doc()
+    data = doc.model_dump(mode="json")
+    data["regions"]["ink"] = {
+        "anchor": "root",
+        "layer": 3,
+        "shapes": [
+            {"op": "bitmap", "at": [0, 0], "key": {"o": "black", "r": "red"}, "rows": ["or"]}
+        ],
+    }
+    data["regions"]["mixed"] = {
+        "anchor": "root",
+        "layer": 4,
+        "shapes": [
+            {"op": "rect", "color": "blue", "at": [0, 0], "size": [4, 4]},
+            {"op": "bitmap", "at": [1, 1], "key": {"g": "green"}, "rows": ["g"]},
+        ],
+    }
+    return CharacterAsset.model_validate(data)
+
+
 @pytest.fixture
 def paths(tmp_path):
     return ProjectPaths(root=tmp_path, config=ProjectConfig(name="test"))
@@ -135,6 +163,24 @@ def test_resize_region_below_min_size_raises():
         apply_operation(doc, op)
 
 
+def test_resize_region_bitmap_only_region_raises():
+    doc = make_doc_with_bitmap()
+    op = OperationSpec(name="resize_region", params={"region": "ink", "delta": [2, 2]})
+    with pytest.raises(OperationError, match="bitmap"):
+        apply_operation(doc, op)
+
+
+def test_resize_region_mixed_region_resizes_rect_leaves_bitmap():
+    doc = make_doc_with_bitmap()
+    op = OperationSpec(name="resize_region", params={"region": "mixed", "delta": [2, 2]})
+    new_doc, _ = apply_operation(doc, op)
+    rect, bitmap = new_doc.regions["mixed"].shapes
+    assert rect.size == (6, 6)
+    assert rect.at == (-1, -1)
+    assert bitmap.at == (1, 1)
+    assert bitmap.rows == ["g"]
+
+
 # --- translate_region -----------------------------------------------------------
 
 
@@ -143,6 +189,15 @@ def test_translate_region_round_trip():
     op = OperationSpec(name="translate_region", params={"region": "head", "offset": [3, -2]})
     new_doc, inverse = apply_operation(doc, op)
     assert new_doc.regions["head"].shapes[0].at == (4, -1)
+    restored, _ = apply_operation(new_doc, inverse)
+    assert content_hash(restored) == content_hash(doc)
+
+
+def test_translate_region_bitmap_moves_at_and_round_trips():
+    doc = make_doc_with_bitmap()
+    op = OperationSpec(name="translate_region", params={"region": "ink", "offset": [5, -3]})
+    new_doc, inverse = apply_operation(doc, op)
+    assert new_doc.regions["ink"].shapes[0].at == (5, -3)
     restored, _ = apply_operation(new_doc, inverse)
     assert content_hash(restored) == content_hash(doc)
 
@@ -182,6 +237,32 @@ def test_recolor_region_non_injective_mapping_raises():
         apply_operation(doc, op)
 
 
+def test_recolor_region_bitmap_does_not_raise_keyerror():
+    # Confirmed bug: _recolor_region did `shape_data["color"]` unconditionally, which
+    # raises KeyError on a bitmap shape (no `color` field; colour lives in `key`'s
+    # values). Reproduced by reverting the fix and confirming this test then fails
+    # with KeyError instead of passing.
+    doc = make_doc_with_bitmap()
+    op = OperationSpec(
+        name="recolor_region", params={"region": "ink", "mapping": {"black": "green"}}
+    )
+    apply_operation(doc, op)  # must not raise KeyError
+
+
+def test_recolor_region_bitmap_rewrites_key_and_round_trips():
+    doc = make_doc_with_bitmap()
+    op = OperationSpec(
+        name="recolor_region",
+        params={"region": "ink", "mapping": {"black": "green", "red": "blue"}},
+    )
+    new_doc, inverse = apply_operation(doc, op)
+    bitmap = new_doc.regions["ink"].shapes[0]
+    assert bitmap.key == {"o": "green", "r": "blue"}
+    assert bitmap.rows == ["or"]
+    restored, _ = apply_operation(new_doc, inverse)
+    assert content_hash(restored) == content_hash(doc)
+
+
 # --- set_frame_duration -----------------------------------------------------------
 
 
@@ -204,6 +285,21 @@ def test_set_frame_duration_all_frames_round_trip():
     )
     new_doc, inverse = apply_operation(doc, op)
     assert [f.duration_ms for f in new_doc.animations["idle"].frames] == [200, 200]
+    restored, _ = apply_operation(new_doc, inverse)
+    assert content_hash(restored) == content_hash(doc)
+
+
+def test_set_frame_duration_round_trips_with_bitmap_region_present():
+    # set_frame_duration never touches shapes; this proves a doc that happens to
+    # carry a bitmap region still serialises/re-validates cleanly through the
+    # dump-mutate-revalidate cycle every operation goes through.
+    doc = make_doc_with_bitmap()
+    op = OperationSpec(
+        name="set_frame_duration", params={"animation": "idle", "frame": 0, "duration_ms": 250}
+    )
+    new_doc, inverse = apply_operation(doc, op)
+    assert new_doc.animations["idle"].frames[0].duration_ms == 250
+    assert new_doc.regions["ink"].shapes[0].key == {"o": "black", "r": "red"}
     restored, _ = apply_operation(new_doc, inverse)
     assert content_hash(restored) == content_hash(doc)
 
@@ -245,6 +341,28 @@ def test_remove_frame_last_remaining_raises():
         )
 
 
+def test_add_frame_round_trips_with_bitmap_region_present():
+    doc = make_doc_with_bitmap()
+    op = OperationSpec(
+        name="add_frame", params={"animation": "idle", "at": 1, "frame": {"duration_ms": 80}}
+    )
+    new_doc, inverse = apply_operation(doc, op)
+    assert len(new_doc.animations["idle"].frames) == 3
+    assert new_doc.regions["mixed"].shapes[1].key == {"g": "green"}
+    restored, _ = apply_operation(new_doc, inverse)
+    assert content_hash(restored) == content_hash(doc)
+
+
+def test_remove_frame_round_trips_with_bitmap_region_present():
+    doc = make_doc_with_bitmap()
+    op = OperationSpec(name="remove_frame", params={"animation": "idle", "at": 0})
+    new_doc, inverse = apply_operation(doc, op)
+    assert len(new_doc.animations["idle"].frames) == 1
+    assert new_doc.regions["ink"].shapes[0].rows == ["or"]
+    restored, _ = apply_operation(new_doc, inverse)
+    assert content_hash(restored) == content_hash(doc)
+
+
 # --- set_region_visibility --------------------------------------------------------------
 
 
@@ -278,6 +396,19 @@ def test_set_region_visibility_requires_frames_or_directions():
     op = OperationSpec(name="set_region_visibility", params={"region": "head", "visible": False})
     with pytest.raises(OperationError):
         apply_operation(doc, op)
+
+
+def test_set_region_visibility_round_trips_on_bitmap_region():
+    doc = make_doc_with_bitmap()
+    op = OperationSpec(
+        name="set_region_visibility",
+        params={"region": "ink", "visible": False, "directions": ["up"]},
+    )
+    new_doc, inverse = apply_operation(doc, op)
+    assert new_doc.direction_overrides["up"]["ink"].visible is False
+    assert new_doc.regions["ink"].shapes[0].key == {"o": "black", "r": "red"}
+    restored, _ = apply_operation(new_doc, inverse)
+    assert content_hash(restored) == content_hash(doc)
 
 
 # --- protection rules ----------------------------------------------------------------
@@ -367,6 +498,19 @@ def test_replace_spec_rejects_invalid_schema():
     op = OperationSpec(name="replace_spec", params={"spec": new_spec})
     with pytest.raises(OperationError):
         apply_operation(doc, op)
+
+
+def test_replace_spec_round_trips_bitmap_shapes():
+    doc = make_doc_with_bitmap()
+    new_spec = doc.model_dump(mode="json")
+    new_spec["directions"] = ["down", "up", "left"]
+    op = OperationSpec(name="replace_spec", params={"spec": new_spec})
+    new_doc, inverse = apply_operation(doc, op)
+    assert new_doc.directions == ["down", "up", "left"]
+    assert new_doc.regions["ink"].shapes[0].key == {"o": "black", "r": "red"}
+    assert new_doc.regions["mixed"].shapes[1].rows == ["g"]
+    restored, _ = apply_operation(new_doc, inverse)
+    assert content_hash(restored) == content_hash(doc)
 
 
 def test_replace_spec_revision_is_revertible(paths):

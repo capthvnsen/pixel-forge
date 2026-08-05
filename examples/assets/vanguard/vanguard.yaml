@@ -1,0 +1,244 @@
+# Pixel Asset Forge example: "vanguard", a character drawn with bitmap regions.
+#
+# This is the counter-example to every other sprite in this repository. The others
+# are built from `rect` and `ellipse` primitives and look like it: flat fills, no
+# tonal ramps, no outlines, axis-aligned everything. This one carries real
+# palette-indexed pixel art in `op: bitmap` shapes and gets what primitives cannot:
+#
+#   - a dark outline separating the sprite from the background and breaking up
+#     internal forms
+#   - a three-step tonal ramp per material, lit consistently from the upper left
+#   - shapes that are not rectangles
+#
+# Everything else in the pipeline is unchanged: the same anchors, the same layering,
+# the same mirroring, the same validation, the same Godot export. Only the pixels
+# come from somewhere better.
+schema_version: 1
+
+asset:
+  id: vanguard
+  type: character
+  canvas: [32, 32]
+  perspective: three_quarter_top_down
+  logical_pixel_scale: 1
+  baseline_y: 30
+
+palette:
+  id: vanguard_palette
+  # Colours sharing a `ramp` id are one material's value steps. Declaring them is
+  # what lets PIX012 tell "deliberately flat" from "forgot to shade it".
+  colors:
+    - { id: ink, hex: "#12141c", role: outline }
+    - { id: armor_lite, hex: "#7b93b8", ramp: armor, role: light }
+    - { id: armor_mid, hex: "#4a5c7d", ramp: armor }
+    - { id: armor_dark, hex: "#2b3648", ramp: armor, role: shadow }
+    - { id: metal_lite, hex: "#a8b1bf", ramp: metal, role: light }
+    - { id: metal_mid, hex: "#6e7683", ramp: metal }
+    - { id: metal_dark, hex: "#3a3f47", ramp: metal, role: shadow }
+    - { id: visor_glow, hex: "#7fe6ff", ramp: visor, role: light }
+    - { id: visor_mid, hex: "#2f9fc4", ramp: visor }
+    - { id: accent, hex: "#d97b34", ramp: accent }
+    - { id: shadow, hex: "#0a0b11", role: shadow }
+
+directions: [south, west, east, north]
+mirror:
+  east: west
+
+anchors:
+  feet: [16, 30]
+  legs: [16, 20]
+  torso: [16, 20]
+  head: [16, 8]
+  left_arm: [10, 12]
+  right_arm: [22, 12]
+  right_hand: [22, 19]
+
+regions:
+  shadow:
+    anchor: feet
+    layer: 0
+    shapes:
+      - { op: ellipse, color: shadow, at: [-7, -2], size: [14, 3] }
+
+  legs:
+    anchor: legs
+    layer: 10
+    shapes:
+      - op: bitmap
+        at: [-5, 0]
+        key: { o: ink, M: metal_mid, L: metal_lite, D: metal_dark }
+        rows:
+          - ".oLMooMDo."
+          - ".oLMooMDo."
+          - ".oLMooMDo."
+          - ".oLMooMDo."
+          - ".oLMooMDo."
+          - ".oLMooMDo."
+          - ".oMMooMDo."
+          - ".oLLooMDo."
+          - ".oLLooDDo."
+          - ".oooooooo."
+
+  # Arms are separate regions so the weapon arm can be posed independently of the
+  # torso, and so the lit and shadowed sides can carry different ramp steps.
+  left_arm:
+    anchor: left_arm
+    layer: 15
+    shapes:
+      - op: bitmap
+        at: [-2, 0]
+        key: { o: ink, l: armor_lite, m: armor_mid, L: metal_lite }
+        rows:
+          - "ollo"
+          - "ollo"
+          - "ollo"
+          - "ollo"
+          - "olmo"
+          - "olmo"
+          - "oLLo"
+          - "oooo"
+
+  right_arm:
+    anchor: right_arm
+    layer: 15
+    shapes:
+      - op: bitmap
+        at: [-2, 0]
+        key: { o: ink, m: armor_mid, d: armor_dark, D: metal_dark }
+        rows:
+          - "ommo"
+          - "ommo"
+          - "ommo"
+          - "ommo"
+          - "omdo"
+          - "omdo"
+          - "oDDo"
+          - "oooo"
+
+  torso:
+    anchor: torso
+    layer: 20
+    shapes:
+      - op: bitmap
+        at: [-5, -12]
+        key:
+          o: ink
+          l: armor_lite
+          m: armor_mid
+          d: armor_dark
+          a: accent
+          D: metal_dark
+        rows:
+          - "..oooooo.."
+          - ".ollllmmdo"
+          - "ollmmmmmdo"
+          - "olmmmmmmdo"
+          - "olmaaaamdo"
+          - "olmmmmmmdo"
+          - "olmmmmmmdo"
+          - "olmmmmmmdo"
+          - ".olmmmmdo."
+          - ".odmmmmdo."
+          - ".oDDDDDDo."
+          - ".oooooooo."
+
+  head:
+    anchor: head
+    layer: 30
+    shapes:
+      - op: bitmap
+        at: [-5, -4]
+        key: { o: ink, l: armor_lite, m: armor_mid, d: armor_dark, g: visor_glow, v: visor_mid }
+        rows:
+          - "...oooo..."
+          - "..olllmo.."
+          - ".ollgggmo."
+          - ".olggggmo."
+          - ".olggvvmo."
+          - ".olmvvmdo."
+          - "..olmmdo.."
+          - "...oooo..."
+
+  weapon:
+    anchor: right_hand
+    layer: 40
+    shapes:
+      - op: bitmap
+        at: [-4, -2]
+        key: { o: ink, M: metal_mid, L: metal_lite, D: metal_dark, a: accent }
+        rows:
+          - "..ooooooo."
+          - ".oMLLLLMo."
+          - "oMMLLLLaMo"
+          - ".oDDDDDDo."
+          - "..oooooo.."
+
+# North faces away: the visor and the chest accent are not visible, and the weapon
+# reads from the far side.
+direction_overrides:
+  north:
+    head: { color_swap: { visor_glow: armor_lite, visor_mid: armor_mid } }
+    torso: { color_swap: { accent: armor_mid } }
+
+animations:
+  idle:
+    loop: true
+    frames:
+      - { duration_ms: 200, transforms: { torso: { offset: [0, 0] }, head: { offset: [0, 0] } } }
+      - { duration_ms: 200, transforms: { torso: { offset: [0, -1] }, head: { offset: [0, -1] } } }
+      - { duration_ms: 200, transforms: { torso: { offset: [0, -1] }, head: { offset: [0, -1] } } }
+      - { duration_ms: 200, transforms: { torso: { offset: [0, 0] }, head: { offset: [0, 0] } } }
+
+  walk:
+    loop: true
+    frames:
+      - {
+          duration_ms: 110,
+          transforms:
+            {
+              torso: { offset: [0, -1] },
+              head: { offset: [0, -1] },
+              left_arm: { offset: [0, -1] },
+              right_arm: { offset: [0, 1] },
+            },
+        }
+      - {
+          duration_ms: 110,
+          transforms:
+            {
+              torso: { offset: [0, 0] },
+              head: { offset: [0, 0] },
+              left_arm: { offset: [0, 0] },
+              right_arm: { offset: [0, 0] },
+            },
+        }
+      - {
+          duration_ms: 110,
+          transforms:
+            {
+              torso: { offset: [0, -1] },
+              head: { offset: [0, -1] },
+              left_arm: { offset: [0, 1] },
+              right_arm: { offset: [0, -1] },
+            },
+        }
+      - {
+          duration_ms: 110,
+          transforms:
+            {
+              torso: { offset: [0, 0] },
+              head: { offset: [0, 0] },
+              left_arm: { offset: [0, 0] },
+              right_arm: { offset: [0, 0] },
+            },
+        }
+
+export:
+  preview_format: gif
+  preview_loop: true
+
+validation:
+  palette_limit: 24
+  require_stable_baseline: true
+  require_stable_anchors: true
+  allow_antialiasing: false

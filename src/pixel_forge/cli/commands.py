@@ -28,6 +28,7 @@ from pixel_forge.schemas import (
     AssetType,
     GodotManifest,
     OperationSpec,
+    Palette,
     ProvenanceEntry,
     RevisionDiff,
     RevisionRecord,
@@ -134,6 +135,18 @@ def _parse_key_value_pairs(pairs: Sequence[str], *, option_name: str) -> dict[st
             raise typer.BadParameter(f"must be KEY=VALUE, got {pair!r}", param_hint=option_name)
         result[key] = _parse_param_value(raw_value)
     return result
+
+
+def _parse_vec2(raw: str, *, option_name: str) -> tuple[int, int]:
+    parts = raw.split(",")
+    if len(parts) != 2:
+        raise typer.BadParameter(f"must be X,Y, got {raw!r}", param_hint=option_name)
+    try:
+        return (int(parts[0]), int(parts[1]))
+    except ValueError as exc:
+        raise typer.BadParameter(
+            f"must be two ints X,Y, got {raw!r}", param_hint=option_name
+        ) from exc
 
 
 def _parse_provenance(entries: Sequence[str]) -> list[ProvenanceEntry]:
@@ -388,6 +401,125 @@ def diff_cmd(
     resolved_id = _normalize_asset_id(asset_id)
     diff = api.compare_asset_revisions(root, resolved_id, rev_a, rev_b)
     _emit(state, diff, _render_diff)
+
+
+# --- bitmap import / vision loop ------------------------------------------------------------------
+
+
+def import_region_cmd(
+    ctx: typer.Context,
+    asset_id: str = typer.Argument(..., help=_ASSET_ID_HELP),
+    region: str = typer.Argument(..., help="Region name to import into."),
+    png_path: str = typer.Option(..., "--from", help="Source PNG path, resolved against --root."),
+    at: str | None = typer.Option(
+        None, "--at", help="Override the bitmap's position relative to the region anchor, as X,Y."
+    ),
+    snap: bool = typer.Option(
+        False, "--snap", help="Snap unmatched source colours to the nearest palette colour."
+    ),
+    extend_palette: bool = typer.Option(
+        False, "--extend-palette", help="Add palette colours the PNG uses that it lacks."
+    ),
+    append: bool = typer.Option(
+        False,
+        "--append",
+        help="Append to the region's existing shapes instead of replacing them.",
+    ),
+    direction: str | None = typer.Option(
+        None,
+        "--direction",
+        help="Not expressible in the current schema; passing this always raises.",
+    ),
+    timestamp: str | None = typer.Option(
+        None, "--timestamp", help="ISO-8601 UTC timestamp for the revision; defaults to now."
+    ),
+    root: Path = typer.Option(Path("."), "--root", help=_ROOT_HELP),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Compute the import without writing anything."
+    ),
+) -> None:
+    """Import a PNG's pixels into a region as a palette-indexed bitmap shape."""
+    state = _state(ctx)
+    resolved_id = _normalize_asset_id(asset_id)
+    at_vec = _parse_vec2(at, option_name="--at") if at is not None else None
+    resolved_timestamp = timestamp if timestamp is not None else _default_timestamp()
+    result = api.import_region(
+        root,
+        resolved_id,
+        region,
+        png_path,
+        direction=direction,
+        at=at_vec,
+        snap=snap,
+        extend_palette=extend_palette,
+        replace=not append,
+        timestamp=resolved_timestamp,
+        dry_run=dry_run,
+    )
+    _emit(state, result, _render_import_result)
+
+
+def extract_palette_cmd(
+    ctx: typer.Context,
+    png_path: str = typer.Option(..., "--from", help="Source PNG path, resolved against --root."),
+    max_colors: int = typer.Option(
+        24, "--max-colors", min=1, help="Maximum number of colours to extract."
+    ),
+    root: Path = typer.Option(Path("."), "--root", help=_ROOT_HELP),
+) -> None:
+    """Build a palette from a PNG's most frequent opaque colours."""
+    state = _state(ctx)
+    palette = api.extract_palette_from_png(root, png_path, max_colors=max_colors)
+    _emit(state, palette, _render_palette)
+
+
+def view_cmd(
+    ctx: typer.Context,
+    asset_id: str = typer.Argument(..., help=_ASSET_ID_HELP),
+    animation: str = typer.Option(..., "--animation", help="Animation name."),
+    direction: str = typer.Option(..., "--direction", help="Direction name."),
+    frame: int = typer.Option(0, "--frame", min=0, help="Frame index within the animation."),
+    scale: int = typer.Option(8, "--scale", min=1, help="Integer upscale factor."),
+    out: Path | None = typer.Option(
+        None, "-o", "--out", help="Output PNG path, resolved against --root."
+    ),
+    root: Path = typer.Option(Path("."), "--root", help=_ROOT_HELP),
+) -> None:
+    """Render one annotated frame (baseline, anchors, bbox) for visual inspection."""
+    state = _state(ctx)
+    resolved_id = _normalize_asset_id(asset_id)
+    result = api.render_view(
+        root,
+        resolved_id,
+        animation=animation,
+        direction=direction,
+        frame=frame,
+        scale=scale,
+        out_path=out,
+    )
+    _emit(state, result, _render_view_result)
+
+
+def contact_cmd(
+    ctx: typer.Context,
+    asset_id: str = typer.Argument(..., help=_ASSET_ID_HELP),
+    scale: int = typer.Option(4, "--scale", min=1, help="Integer upscale factor."),
+    annotate: bool = typer.Option(
+        False, "--annotate", help="Draw baseline/anchor/bbox diagnostic overlays."
+    ),
+    out: Path | None = typer.Option(
+        None, "-o", "--out", help="Output PNG path, resolved against --root."
+    ),
+    root: Path = typer.Option(Path("."), "--root", help=_ROOT_HELP),
+) -> None:
+    """Build a fresh contact sheet at any scale, optionally with vision-loop overlays."""
+    state = _state(ctx)
+    resolved_id = _normalize_asset_id(asset_id)
+    if annotate:
+        result = api.render_annotated_contact(root, resolved_id, scale=scale, out_path=out)
+    else:
+        result = api.render_contact_sheet(root, resolved_id, scale=scale, out_path=out)
+    _emit(state, result, _render_view_result)
 
 
 # --- terrain / build ---------------------------------------------------------------------------
@@ -656,6 +788,34 @@ def _render_build_report(r: api.BuildReport) -> str:
     if r.failed:
         lines.append(f"failed: {', '.join(r.failed)}")
     return "\n".join(lines)
+
+
+def _render_import_result(r: api.ImportResult) -> str:
+    lines = [
+        f"{r.asset_id}/{r.region}: {r.width}x{r.height} at {list(r.at)}"
+        + (" (dry-run)" if r.dry_run else "")
+    ]
+    lines.append(
+        f"  matched={r.matched} snapped={sum(r.snapped.values())} "
+        f"unmatched={sum(r.unmatched.values())}"
+    )
+    if r.added_colors:
+        lines.append(f"  added colours: {', '.join(r.added_colors)}")
+    if r.unmatched:
+        lines.append(f"  unmatched: {r.unmatched}")
+    lines.append(f"  revision: {r.revision.revision_id}")
+    return "\n".join(lines)
+
+
+def _render_palette(p: Palette) -> str:
+    lines = [f"{p.id}: {len(p.colors)} colour(s)"]
+    for c in p.colors:
+        lines.append(f"  {c.id}: {c.hex}")
+    return "\n".join(lines)
+
+
+def _render_view_result(r: api.ViewResult) -> str:
+    return f"{r.asset_id}: {r.path} ({r.width}x{r.height}, scale={r.scale})"
 
 
 def _render_style_profile(p: StyleProfile) -> str:

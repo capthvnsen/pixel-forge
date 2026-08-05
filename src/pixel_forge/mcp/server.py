@@ -33,10 +33,12 @@ from pixel_forge.api import (
     AssetInspection,
     AssetSummary,
     BuildReport,
+    ImportResult,
     OperationInfo,
     PreviewResult,
     RenderResult,
     SeamReport,
+    ViewResult,
 )
 from pixel_forge.errors import ForgeError
 from pixel_forge.schemas import (
@@ -45,6 +47,7 @@ from pixel_forge.schemas import (
     GodotManifest,
     JSONValue,
     OperationSpec,
+    Palette,
     ProjectConfig,
     ProvenanceEntry,
     RevisionDiff,
@@ -261,6 +264,113 @@ def build_asset_family(force: bool = False) -> BuildReport:
     exist.
     """
     return _guard(lambda: api.build_all(_root(), force=force))
+
+
+# --- bitmap import / vision loop ------------------------------------------------------------------
+
+
+@mcp_server.tool()
+def import_region(
+    asset_id: str,
+    region: str,
+    png_path: str,
+    timestamp: str,
+    direction: str | None = None,
+    at: tuple[int, int] | None = None,
+    snap: bool = False,
+    extend_palette: bool = False,
+    replace: bool = True,
+    dry_run: bool = False,
+) -> ImportResult:
+    """Import a PNG's real pixels into `region` as a palette-indexed `bitmap` shape,
+    recorded as an auditable revision (the same `replace_spec` machinery
+    `update_asset_spec` uses).
+
+    Positioned relative to the region's anchor at the source image's trimmed opaque
+    bounding box by default, or at `at` when given. `replace=True` (default) replaces
+    the region's shapes; `replace=False` appends. `png_path` is resolved against the
+    server's fixed project root and must stay inside it (raises otherwise).
+
+    With `snap=False` and `extend_palette=False`, source colours matching no palette
+    colour are dropped and reported in the result's `unmatched` (by hex) — unless
+    they exceed half of the opaque source pixels, in which case this raises instead
+    of silently importing a mostly-empty bitmap. `extend_palette=True` instead adds
+    the missing colours to the palette (raises if that would exceed
+    `validation.palette_limit`). `direction` is not expressible in the current schema
+    (regions are shared across every direction) and always raises if given.
+    """
+    return _guard(
+        lambda: api.import_region(
+            _root(),
+            asset_id,
+            region,
+            png_path,
+            direction=direction,
+            at=at,
+            snap=snap,
+            extend_palette=extend_palette,
+            replace=replace,
+            timestamp=timestamp,
+            dry_run=dry_run,
+        )
+    )
+
+
+@mcp_server.tool()
+def extract_palette(png_path: str, max_colors: int = 24) -> Palette:
+    """Build a `Palette` from a PNG's most frequent opaque colours, so externally
+    produced art can seed a palette instead of hand-transcribing hex codes.
+
+    `png_path` is resolved against the server's fixed project root and must stay
+    inside it. Pair with `import_region(..., extend_palette=True)` to bring in art
+    whose palette isn't known ahead of time.
+    """
+    return _guard(lambda: api.extract_palette_from_png(_root(), png_path, max_colors=max_colors))
+
+
+@mcp_server.tool()
+def render_view(
+    asset_id: str,
+    animation: str,
+    direction: str,
+    frame: int = 0,
+    scale: int = 8,
+    out_path: str | None = None,
+) -> ViewResult:
+    """Render one frame with vision-loop diagnostic overlays (declared baseline,
+    every anchor, the frame's silhouette bbox, and a grid once `scale >= 4`) burned
+    into a copy, upscaled, and written to a PNG.
+
+    Call this so a vision-capable agent can look at the frame it just described in
+    the spec and iterate, instead of authoring shape/bitmap coordinates blind.
+    """
+    return _guard(
+        lambda: api.render_view(
+            _root(),
+            asset_id,
+            animation=animation,
+            direction=direction,
+            frame=frame,
+            scale=scale,
+            out_path=out_path,
+        )
+    )
+
+
+@mcp_server.tool()
+def render_annotated_contact(
+    asset_id: str, scale: int = 4, out_path: str | None = None
+) -> ViewResult:
+    """Build the asset's full sprite sheet with vision-loop diagnostic overlays
+    (baseline, anchors, per-cell silhouette bbox) burned into a scaled copy, written
+    to one PNG.
+
+    Call this so a vision-capable agent can look at every frame of an asset at once
+    and iterate, instead of authoring shape/bitmap coordinates blind.
+    """
+    return _guard(
+        lambda: api.render_annotated_contact(_root(), asset_id, scale=scale, out_path=out_path)
+    )
 
 
 def _get_validation_report(root: Path, asset_id: str) -> ValidationReport:

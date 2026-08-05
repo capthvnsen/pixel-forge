@@ -4,6 +4,11 @@
 ordered, transform-adjusted draw plan (`LayerDraw`). `composite` draws that plan onto a
 fresh transparent canvas. Splitting the two lets `rendering.local` reuse `plan_layers`
 on region subsets (mirror-safe vs mirror-unsafe) before compositing them separately.
+
+`scale_size` only ever grows/shrinks a `rect`/`ellipse`'s `size`; it is ignored for
+`bitmap` shapes (and `pixel`/`line`, which have no `size` either). Resampling hand-drawn
+pixel art is not a size delta: silently nearest-scaling it would be worse than doing
+nothing, so bitmaps stay their authored size and any resizing is a re-authoring problem.
 """
 
 from __future__ import annotations
@@ -15,9 +20,16 @@ from pixel_forge.domain.geometry import anchor_world_pos
 from pixel_forge.domain.palette import ResolvedPalette
 from pixel_forge.errors import RenderError
 from pixel_forge.rendering.canvas import Canvas, Vec2
-from pixel_forge.rendering.shapes import draw_shape
+from pixel_forge.rendering.shapes import draw_bitmap, draw_shape
 from pixel_forge.schemas.asset import BaseAssetDoc
-from pixel_forge.schemas.common import EllipseShape, RectShape, Region, RegionTransform, Shape
+from pixel_forge.schemas.common import (
+    BitmapShape,
+    EllipseShape,
+    RectShape,
+    Region,
+    RegionTransform,
+    Shape,
+)
 
 
 @dataclass(frozen=True)
@@ -31,6 +43,19 @@ class LayerDraw:
 def _apply_color_swap(
     shape: Shape, color_swap: Mapping[str, str], palette: ResolvedPalette
 ) -> Shape:
+    """Rewrite a shape's colour references per `color_swap` (old palette id -> new).
+
+    A `BitmapShape` has no `.color`; it carries colour through `key`'s values instead, so
+    every value is looked up individually and rewritten in place. Any single-colour shape
+    just swaps `.color`. Palette validation of unknown swap targets happens later, when the
+    swapped colour id is actually resolved to RGBA (in `composite`) — that way an unused
+    key entry pointing at a bad swap target still surfaces as a `PaletteError`.
+    """
+    if isinstance(shape, BitmapShape):
+        if not color_swap:
+            return shape
+        new_key = {char: color_swap.get(color_id, color_id) for char, color_id in shape.key.items()}
+        return shape.model_copy(update={"key": new_key})
     new_id = color_swap.get(shape.color)
     if new_id is None:
         return shape
@@ -48,7 +73,8 @@ def _apply_scale_size(region_name: str, shape_index: int, shape: Shape, scale_si
     revision system's `resize_region` operation depends on this exact convention: it must
     be able to compute the inverse offset without re-deriving it here.
 
-    `PixelShape`/`LineShape` have no `size` and are returned unchanged.
+    `PixelShape`/`LineShape`/`BitmapShape` have no `size` and are returned unchanged: a
+    bitmap's dimensions come from its `rows`, and resampling art is not a size delta.
     """
     if scale_size == (0, 0) or not isinstance(shape, RectShape | EllipseShape):
         return shape
@@ -111,5 +137,9 @@ def composite(canvas_size: Vec2, layers: Sequence[LayerDraw], palette: ResolvedP
     canvas = Canvas(*canvas_size)
     for layer in layers:
         for shape in layer.shapes:
-            draw_shape(canvas, shape, layer.origin, palette.rgba(shape.color))
+            if isinstance(shape, BitmapShape):
+                colors = {char: palette.rgba(color_id) for char, color_id in shape.key.items()}
+                draw_bitmap(canvas, shape, layer.origin, colors)
+            else:
+                draw_shape(canvas, shape, layer.origin, palette.rgba(shape.color))
     return canvas

@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping, Sequence
+from dataclasses import replace as _dc_replace
 from pathlib import Path
 from typing import Any, Literal
 
@@ -27,9 +28,11 @@ from pixel_forge import templates
 from pixel_forge.animation import ResolvedFrame, resolve_frames, resolve_terrain_frames
 from pixel_forge.domain import (
     Project,
+    check_palette_limit,
     content_hash,
     load_yaml,
     resolve_palette,
+    safe_join,
     short,
     validate_asset_id,
 )
@@ -48,6 +51,7 @@ from pixel_forge.rendering import (
     ExternalFrameBackend,
     RenderBackend,
     SheetCell,
+    SpriteSheet,
     build_atlas,
     build_contact_sheet,
     build_seam_map,
@@ -57,6 +61,8 @@ from pixel_forge.rendering import (
     render_asset_frames,
     render_terrain_tiles,
 )
+from pixel_forge.rendering.annotate import annotate_frame, build_annotated_contact, upscale_view
+from pixel_forge.rendering.ingest import extract_palette, load_image, png_to_bitmap
 from pixel_forge.revisions import (
     affected_targets,
     apply_operation,
@@ -70,10 +76,13 @@ from pixel_forge.schemas import (
     AssetDocUnion,
     AssetManifest,
     AssetType,
+    BitmapShape,
     CharacterAsset,
     EnemyAsset,
     GodotManifest,
     OperationSpec,
+    Palette,
+    PaletteColor,
     ProjectConfig,
     PropAsset,
     ProvenanceEntry,
@@ -201,6 +210,32 @@ class OperationInfo(BaseModel):
     params: list[str]
 
 
+class ImportResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    asset_id: str
+    region: str
+    at: tuple[int, int]
+    width: int
+    height: int
+    matched: int
+    snapped: dict[str, int]
+    unmatched: dict[str, int]
+    added_colors: list[str]
+    revision: RevisionRecord
+    dry_run: bool
+
+
+class ViewResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    asset_id: str
+    path: str
+    width: int
+    height: int
+    scale: int
+
+
 # --- internal helpers -----------------------------------------------------------------------
 
 
@@ -223,6 +258,17 @@ def _load_doc(project: Project, asset_id: str) -> AssetDocUnion:
             f"no asset {asset_id!r} in project at {project.root}; available: {available}"
         )
     return project.load_asset(asset_id)
+
+
+def _require_sprite_doc(doc: AssetDocUnion, fn_name: str) -> SpriteDoc:
+    """Narrow `doc` to a character/enemy/prop asset, raising for terrain (which has no
+    top-level `regions`/`anchors` — its regions live per-tile)."""
+    if isinstance(doc, TerrainAsset):
+        raise ForgeError(
+            f"asset {doc.asset.id!r} is a terrain asset; {fn_name} applies only to "
+            "character, enemy, and prop assets"
+        )
+    return doc
 
 
 def _summary(project: Project, doc: AssetDocUnion) -> AssetSummary:
@@ -453,6 +499,18 @@ def _sprite_backend(project: Project, doc: SpriteDoc) -> RenderBackend | None:
     if doc.source is None:
         return None
     return ExternalFrameBackend(project.paths.asset_dir(doc.asset.id))
+
+
+def _sprite_sheet(project: Project, doc: SpriteDoc) -> SpriteSheet:
+    """Render every frame and pack it into a sprite sheet — the shared setup behind
+    `render_annotated_contact` and `render_contact_sheet`."""
+    resolved = resolve_frames(doc)
+    frames = render_asset_frames(doc, _sprite_backend(project, doc))
+    return build_sprite_sheet(
+        [(f, frames[(f.animation, f.direction, f.index)]) for f in resolved],
+        doc.asset.canvas,
+        columns=doc.export.sheet_columns,
+    )
 
 
 def _render_sprite(project: Project, doc: SpriteDoc, *, force: bool, dry_run: bool) -> RenderResult:
@@ -764,6 +822,279 @@ def list_operations() -> list[OperationInfo]:
         OperationInfo(name=op.name, description=op.description, params=list(op.params))
         for op in available_operations()
     ]
+
+
+# --- bitmap import / vision loop ------------------------------------------------------------------
+
+# Fraction of opaque source pixels that may go unmatched (snap=False, extend_palette=False)
+# before import_region refuses outright instead of just reporting them. A handful of
+# off-palette edge pixels is a normal reason to reach for --snap; losing more than half the
+# art to silent transparency means the palette is simply wrong for this source image, and an
+# import that "succeeds" while discarding most of the pixels is worse than a loud failure.
+_UNMATCHED_RAISE_FRACTION = 0.5
+
+
+def _extend_palette(
+    palette: Palette, unmatched: Mapping[str, int], limit: int
+) -> tuple[Palette, list[str]]:
+    """Append one new `PaletteColor` per unmatched hex to `palette`.
+
+    Ordered by descending pixel count then ascending hex (the same tie-break
+    `ingest.extract_palette` uses), so the result is a pure function of `unmatched`,
+    never of dict iteration order. Ids are `import_<hex-without-#>`: deterministic and
+    collision-free, since a hex code is unique per `unmatched` entry.
+    """
+    ordered = sorted(unmatched.items(), key=lambda kv: (-kv[1], kv[0]))
+    existing_ids = {c.id for c in palette.colors}
+    new_colors: list[PaletteColor] = []
+    new_ids: list[str] = []
+    for hex_str, _count in ordered:
+        color_id = f"import_{hex_str.lstrip('#')}"
+        if color_id in existing_ids:
+            raise ForgeError(
+                f"import_region: generated palette id {color_id!r} for colour {hex_str} "
+                f"already exists in palette {palette.id!r}"
+            )
+        new_colors.append(PaletteColor(id=color_id, hex=hex_str))
+        new_ids.append(color_id)
+        existing_ids.add(color_id)
+    extended = Palette(id=palette.id, colors=[*palette.colors, *new_colors])
+    excess = check_palette_limit(extended, limit)
+    if excess:
+        raise ForgeError(
+            f"import_region: extending the palette by {len(new_colors)} colour(s) would grow "
+            f"it to {len(extended.colors)}, exceeding validation.palette_limit of {limit} "
+            f"(over by {len(excess)}: {', '.join(excess)})"
+        )
+    return extended, new_ids
+
+
+def import_region(
+    root: Path,
+    asset_id: str,
+    region: str,
+    png_path: str | Path,
+    *,
+    direction: str | None = None,
+    at: tuple[int, int] | None = None,
+    snap: bool = False,
+    extend_palette: bool = False,
+    replace: bool = True,
+    timestamp: str,
+    dry_run: bool = False,
+) -> ImportResult:
+    """Import a PNG's pixels into `region` as a palette-indexed `bitmap` shape.
+
+    The bitmap is positioned relative to the region's anchor: by default at the
+    opaque bounding box's trimmed offset (`IngestReport.trimmed_to`), or at `at` when
+    given explicitly. `replace=True` (the default) replaces the region's shapes;
+    `replace=False` appends the bitmap after them.
+
+    `direction` is not expressible in the current schema: `regions` are shared across
+    every direction and `direction_overrides` carries only offset/visibility/
+    color_swap/scale_size transforms, never a distinct shape list, so any non-`None`
+    value raises rather than silently importing into the shared region.
+
+    With `extend_palette=False` and `snap=False`, source colours that match no
+    palette colour are dropped (rendered transparent) and reported in
+    `ImportResult.unmatched` by hex — except when they exceed
+    `_UNMATCHED_RAISE_FRACTION` of the opaque source pixels, in which case this raises
+    instead of silently importing what would be a mostly-empty bitmap.
+
+    Recorded as a `replace_spec` revision via `update_asset_spec` — the generic
+    "structural edit" operation already used for `pin_asset_source` — rather than a
+    bespoke operation, so imported art goes through the same revision machinery
+    (protection checks, validation, the append-only log) as every other edit.
+    """
+    project = _project(root)
+    doc = _require_sprite_doc(_load_doc(project, asset_id), "import_region")
+    if direction is not None:
+        raise ForgeError(
+            "import_region: `direction` is not supported — regions are shared across every "
+            "direction in the current schema, and direction_overrides carries only "
+            "offset/visibility/color_swap/scale_size, never a distinct shape list. Import "
+            "into the shared region with direction=None instead."
+        )
+    if region not in doc.regions:
+        raise ForgeError(f"unknown region {region!r}; available regions: {sorted(doc.regions)}")
+
+    image = load_image(safe_join(project.root, str(png_path)))
+    resolved_palette = resolve_palette(doc.palette)
+    bitmap, report = png_to_bitmap(image, resolved_palette, snap=snap, trim=True)
+
+    new_palette = doc.palette
+    added_colors: list[str] = []
+    if extend_palette and report.unmatched:
+        new_palette, added_colors = _extend_palette(
+            doc.palette, report.unmatched, doc.validation.palette_limit
+        )
+        resolved_palette = resolve_palette(new_palette)
+        bitmap, report = png_to_bitmap(image, resolved_palette, snap=snap, trim=True)
+    report = _dc_replace(report, added_colors=tuple(added_colors))
+
+    total_unmatched = sum(report.unmatched.values())
+    total_opaque = report.matched + sum(report.snapped.values()) + total_unmatched
+    if total_opaque and total_unmatched / total_opaque > _UNMATCHED_RAISE_FRACTION:
+        raise ForgeError(
+            f"import_region: {total_unmatched}/{total_opaque} opaque pixel(s) "
+            f"({total_unmatched / total_opaque:.0%}) match no palette colour; refusing an "
+            "import that would silently discard most of the source art. Pass snap=True to "
+            "snap to the nearest palette colour, or extend_palette=True to add the missing "
+            "colours instead."
+        )
+
+    if report.trimmed_to is not None:
+        x0, y0, _x1, _y1 = report.trimmed_to
+    else:
+        x0, y0 = 0, 0
+    final_at = at if at is not None else (x0, y0)
+    bitmap_shape = BitmapShape.model_validate({**bitmap, "at": list(final_at)})
+
+    spec = doc.model_dump(mode="json", exclude={"kind"})
+    if new_palette is not doc.palette:
+        spec["palette"] = new_palette.model_dump(mode="json")
+    shape_json = bitmap_shape.model_dump(mode="json")
+    if replace:
+        spec["regions"][region]["shapes"] = [shape_json]
+    else:
+        spec["regions"][region]["shapes"].append(shape_json)
+
+    record = update_asset_spec(root, asset_id, spec, timestamp=timestamp, dry_run=dry_run)
+
+    return ImportResult(
+        asset_id=asset_id,
+        region=region,
+        at=final_at,
+        width=report.width,
+        height=report.height,
+        matched=report.matched,
+        snapped=dict(report.snapped),
+        unmatched=dict(report.unmatched),
+        added_colors=list(added_colors),
+        revision=record,
+        dry_run=dry_run,
+    )
+
+
+def extract_palette_from_png(root: Path, png_path: str | Path, *, max_colors: int = 24) -> Palette:
+    """Build a `Palette` from a PNG's most frequent opaque colours (see
+    `rendering.ingest.extract_palette`), so externally produced art can seed a
+    palette instead of hand-transcribing hex codes. `png_path` is resolved against
+    the project root; a path escaping it raises `PathSecurityError`."""
+    project = _project(root)
+    image = load_image(safe_join(project.root, str(png_path)))
+    return extract_palette(image, max_colors=max_colors)
+
+
+def render_view(
+    root: Path,
+    asset_id: str,
+    *,
+    animation: str,
+    direction: str,
+    frame: int = 0,
+    scale: int = 8,
+    out_path: str | Path | None = None,
+) -> ViewResult:
+    """Render one frame with the vision-loop diagnostic overlays (declared baseline,
+    every anchor, the frame's silhouette bbox, and an 8-source-pixel grid once
+    `scale >= 4`) burned into a copy, upscaled, and written to a PNG under
+    `build/<asset_id>/` by default.
+
+    This exists so a vision-capable agent can look at the frame it just described in
+    the spec and iterate, instead of authoring shape coordinates blind.
+    """
+    project = _project(root)
+    doc = _require_sprite_doc(_load_doc(project, asset_id), "render_view")
+    frames = render_asset_frames(doc, _sprite_backend(project, doc))
+    key = (animation, direction, frame)
+    canvas = frames.get(key)
+    if canvas is None:
+        raise ForgeError(
+            f"no frame {animation!r}/{direction!r}#{frame} for asset {asset_id!r}; "
+            f"available (animation, direction, frame): {sorted(frames)}"
+        )
+
+    upscaled = upscale_view(canvas, scale)
+    baseline = doc.asset.baseline_y * scale if doc.asset.baseline_y is not None else None
+    anchors = {name: (x * scale, y * scale) for name, (x, y) in doc.anchors.items()}
+    grid = 8 * scale if scale >= 4 else 0
+    annotated = annotate_frame(upscaled, baseline_y=baseline, anchors=anchors, bbox=True, grid=grid)
+
+    rel_path = (
+        str(out_path)
+        if out_path is not None
+        else f"build/{asset_id}/view_{animation}_{direction}_{frame}.png"
+    )
+    out = safe_join(project.root, rel_path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    annotated.save_png(out)
+    return ViewResult(
+        asset_id=asset_id,
+        path=_rel(project.root, out),
+        width=annotated.width,
+        height=annotated.height,
+        scale=scale,
+    )
+
+
+def render_annotated_contact(
+    root: Path, asset_id: str, *, scale: int = 4, out_path: str | Path | None = None
+) -> ViewResult:
+    """Build the asset's sprite sheet and draw the vision-loop diagnostic overlays
+    (baseline, anchors, per-cell silhouette bbox) onto a scaled copy, written to a PNG
+    under `build/<asset_id>/` by default.
+
+    This exists so a vision-capable agent can look at every frame of an asset at once
+    and iterate, instead of authoring shape coordinates blind.
+    """
+    project = _project(root)
+    doc = _require_sprite_doc(_load_doc(project, asset_id), "render_annotated_contact")
+    sheet = _sprite_sheet(project, doc)
+    contact = build_annotated_contact(
+        sheet, baseline_y=doc.asset.baseline_y, anchors=doc.anchors, scale=scale
+    )
+    rel_path = (
+        str(out_path) if out_path is not None else f"build/{asset_id}/{asset_id}_annotated.png"
+    )
+    out = safe_join(project.root, rel_path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    contact.save_png(out)
+    return ViewResult(
+        asset_id=asset_id,
+        path=_rel(project.root, out),
+        width=contact.width,
+        height=contact.height,
+        scale=scale,
+    )
+
+
+def render_contact_sheet(
+    root: Path, asset_id: str, *, scale: int = 1, out_path: str | Path | None = None
+) -> ViewResult:
+    """Plain (non-diagnostic) contact sheet at an arbitrary scale, for `pixel-forge
+    contact` without `--annotate`. Unlike `render_asset`'s cached contact_sheet output
+    (always scale=1), this always re-renders fresh at the requested scale. Not
+    exposed over MCP — `render_annotated_contact` is the vision-loop entry point;
+    this is a plain-viewing convenience for the CLI only.
+    """
+    project = _project(root)
+    doc = _require_sprite_doc(_load_doc(project, asset_id), "render_contact_sheet")
+    sheet = _sprite_sheet(project, doc)
+    contact = build_contact_sheet(sheet, scale=scale)
+    rel_path = (
+        str(out_path) if out_path is not None else f"build/{asset_id}/{asset_id}_contact_view.png"
+    )
+    out = safe_join(project.root, rel_path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    contact.save_png(out)
+    return ViewResult(
+        asset_id=asset_id,
+        path=_rel(project.root, out),
+        width=contact.width,
+        height=contact.height,
+        scale=scale,
+    )
 
 
 # --- inspection / seams --------------------------------------------------------------------------

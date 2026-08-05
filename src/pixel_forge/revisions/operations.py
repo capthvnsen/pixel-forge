@@ -261,6 +261,14 @@ def _resize_region(
     indices = _resolve_shape_indices(region, op.params.get("shape_indices"))
     indices_json: JSONValue = list(indices)
 
+    if indices and all(shapes_data[idx]["op"] == "bitmap" for idx in indices):
+        raise OperationError(
+            f"resize_region: region {region_name!r} contains only bitmap shapes; resize does "
+            "not apply to bitmap art (there is no `size` to grow or shrink, and resampling the "
+            "pixels would blur them). Re-author the art at the new size and use import_region "
+            "instead."
+        )
+
     restore = op.params.get("restore")
     if restore is not None:
         restore_map = _as_dict(restore, "restore")
@@ -354,9 +362,15 @@ def _recolor_region(
         )
     shapes_data = data["regions"][region_name]["shapes"]
     for shape_data in shapes_data:
-        color = shape_data["color"]
-        if color in mapping:
-            shape_data["color"] = mapping[color]
+        if shape_data["op"] == "bitmap":
+            key_data = shape_data["key"]
+            for char, color in key_data.items():
+                if color in mapping:
+                    key_data[char] = mapping[color]
+        else:
+            color = shape_data["color"]
+            if color in mapping:
+                shape_data["color"] = mapping[color]
     inverse_mapping: dict[str, JSONValue] = {v: k for k, v in mapping.items()}
     return "recolor_region", {"region": region_name, "mapping": inverse_mapping}
 

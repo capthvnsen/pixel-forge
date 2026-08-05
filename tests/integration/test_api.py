@@ -8,6 +8,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from PIL import Image
 
 from pixel_forge import api, templates
 from pixel_forge.domain import Project
@@ -196,6 +197,69 @@ def test_generate_preview_dry_run_writes_nothing(tmp_path: Path) -> None:
     assert result.dry_run is True
     for rel in result.preview_paths.values():
         assert not (root / rel).exists()
+
+
+# --- extract_palette_from_png / render_view / render_annotated_contact ------------------------
+
+
+def test_extract_palette_from_png_orders_by_count_then_hex(tmp_path: Path) -> None:
+    root = _init(tmp_path)
+    png_path = root / "source.png"
+    img = Image.new("RGBA", (3, 1), (0, 0, 0, 0))
+    img.putpixel((0, 0), (255, 0, 0, 255))
+    img.putpixel((1, 0), (0, 255, 0, 255))
+    img.putpixel((2, 0), (0, 255, 0, 255))  # green appears twice -> ranks first
+    img.save(png_path)
+
+    palette = api.extract_palette_from_png(root, "source.png")
+    assert [c.hex for c in palette.colors] == ["#00ff00", "#ff0000"]
+    assert [c.id for c in palette.colors] == ["c00", "c01"]
+
+
+def test_extract_palette_from_png_hostile_path_raises(tmp_path: Path) -> None:
+    root = _init(tmp_path)
+    with pytest.raises(PathSecurityError):
+        api.extract_palette_from_png(root, "../outside.png")
+
+
+def test_render_view_writes_annotated_png_at_expected_size(tmp_path: Path) -> None:
+    root = _init(tmp_path)
+    api.new_asset(root, "character", "hero")
+
+    result = api.render_view(root, "hero", animation="idle", direction="south", scale=8)
+    assert result.asset_id == "hero"
+    assert result.path == "build/hero/view_idle_south_0.png"
+    out = root / result.path
+    assert out.is_file()
+    with Image.open(out) as img:
+        assert img.size == (result.width, result.height) == (32 * 8, 32 * 8)
+
+
+def test_render_view_unknown_frame_raises(tmp_path: Path) -> None:
+    root = _init(tmp_path)
+    api.new_asset(root, "character", "hero")
+    with pytest.raises(ForgeError, match="idle"):
+        api.render_view(root, "hero", animation="idle", direction="north")
+
+
+def test_render_view_rejects_terrain_asset(tmp_path: Path) -> None:
+    root = _init(tmp_path)
+    api.new_asset(root, "terrain", "ground")
+    with pytest.raises(ForgeError, match="terrain"):
+        api.render_view(root, "ground", animation="idle", direction="south")
+
+
+def test_render_annotated_contact_writes_png_matching_reported_size(tmp_path: Path) -> None:
+    root = _init(tmp_path)
+    api.new_asset(root, "character", "hero")
+
+    result = api.render_annotated_contact(root, "hero", scale=4)
+    assert result.path == "build/hero/hero_annotated.png"
+    out = root / result.path
+    assert out.is_file()
+    with Image.open(out) as img:
+        assert img.size == (result.width, result.height)
+    assert result.width > 32 * 4  # bigger than the raw scaled sheet: label gutter + separators
 
 
 # --- export_godot ------------------------------------------------------------------------------
