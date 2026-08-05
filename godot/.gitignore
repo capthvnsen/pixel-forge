@@ -1,0 +1,5 @@
+# Godot editor cache
+.godot/
+
+# Everything the plugin generates — never hand-authored, always safe to delete/rebuild.
+generated/

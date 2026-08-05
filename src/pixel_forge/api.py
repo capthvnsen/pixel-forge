@@ -34,7 +34,7 @@ from pixel_forge.domain import (
     validate_asset_id,
 )
 from pixel_forge.domain.paths import CONFIG_FILENAME
-from pixel_forge.errors import AssetNotFoundError, ForgeError
+from pixel_forge.errors import AssetNotFoundError, ExportError, ForgeError
 from pixel_forge.exporters.godot import build_godot_manifest, write_godot_manifest
 from pixel_forge.preview import write_preview
 from pixel_forge.references import (
@@ -538,28 +538,42 @@ def generate_preview(
     resolved_fmt = fmt or doc.export.preview_format
     build_dir = project.paths.build_asset_dir(asset_id)
     frames = render_asset_frames(doc)
-    direction = doc.directions[0]
 
     all_frames = resolve_frames(doc)
     preview_paths: dict[str, str] = {}
     for animation, anim_spec in doc.animations.items():
-        anim_frames = sorted(
-            (f for f in all_frames if f.animation == animation and f.direction == direction),
-            key=lambda f: f.index,
-        )
-        canvases = [frames[(f.animation, f.direction, f.index)] for f in anim_frames]
-        durations = [f.duration_ms for f in anim_frames]
-        out_base = build_dir / f"preview_{animation}"
-        preview_paths[animation] = _rel(project.root, out_base.with_suffix(f".{resolved_fmt}"))
-        if not dry_run:
-            build_dir.mkdir(parents=True, exist_ok=True)
-            write_preview(
-                out_base, canvases, durations, fmt=resolved_fmt, loop=anim_spec.loop, scale=scale
+        for direction in doc.directions:
+            anim_frames = sorted(
+                (f for f in all_frames if f.animation == animation and f.direction == direction),
+                key=lambda f: f.index,
             )
+            canvases = [frames[(f.animation, f.direction, f.index)] for f in anim_frames]
+            durations = [f.duration_ms for f in anim_frames]
+            key = f"{animation}_{direction}"
+            out_base = build_dir / f"preview_{key}"
+            preview_paths[key] = _rel(project.root, out_base.with_suffix(f".{resolved_fmt}"))
+            if not dry_run:
+                build_dir.mkdir(parents=True, exist_ok=True)
+                write_preview(
+                    out_base,
+                    canvases,
+                    durations,
+                    fmt=resolved_fmt,
+                    loop=anim_spec.loop,
+                    scale=scale,
+                )
 
     return PreviewResult(
         asset_id=asset_id, preview_paths=preview_paths, format=resolved_fmt, dry_run=dry_run
     )
+
+
+def _require_texture_on_disk(project: Project, rel_path: str, asset_id: str) -> None:
+    if not (project.root / rel_path).is_file():
+        raise ExportError(
+            f"texture {rel_path!r} for asset {asset_id!r} does not exist yet; "
+            f"run render_asset({asset_id!r}) (or force=True if it's stale) before export_godot"
+        )
 
 
 def export_godot(root: Path, asset_id: str, *, dry_run: bool = False) -> GodotManifest:
@@ -573,6 +587,7 @@ def export_godot(root: Path, asset_id: str, *, dry_run: bool = False) -> GodotMa
         tiles = render_terrain_tiles(doc)
         _, atlas_cells = build_atlas(tiles)
         atlas_rel = _rel(project.root, build_dir / f"{asset_id}_atlas.png")
+        _require_texture_on_disk(project, atlas_rel, asset_id)
         manifest = build_godot_manifest(
             doc, texture_paths={"atlas": atlas_rel}, spec_hash=spec_hash, atlas_cells=atlas_cells
         )
@@ -585,6 +600,7 @@ def export_godot(root: Path, asset_id: str, *, dry_run: bool = False) -> GodotMa
             columns=doc.export.sheet_columns,
         )
         sheet_rel = _rel(project.root, build_dir / f"{asset_id}_sheet.png")
+        _require_texture_on_disk(project, sheet_rel, asset_id)
         manifest = build_godot_manifest(
             doc,
             sheet=sheet,
@@ -643,12 +659,6 @@ def apply_asset_operation(
             validation=report,
         )
 
-    # Integration note: `ValidationReport` combines `extra="forbid"` with `@computed_field`
-    # properties (`blocking`/`error_count`/`warning_count`), which pydantic serialises into
-    # `model_dump(mode="json")` but then rejects as unknown fields on `model_validate` — so a
-    # persisted revision carrying a `ValidationReport` would break every subsequent
-    # `load_revisions` call for this asset. Passing `validation=None` here avoids writing a
-    # revision log entry that can never be read back; see this task's final report.
     record = record_revision(
         project.paths,
         asset_id,
@@ -657,7 +667,7 @@ def apply_asset_operation(
         doc_before=doc_before,
         doc_after=doc_after,
         timestamp=timestamp,
-        validation=None,
+        validation=report,
     )
     project.save_asset(doc_after)
     return record

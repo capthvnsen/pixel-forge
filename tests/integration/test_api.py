@@ -11,7 +11,7 @@ import pytest
 
 from pixel_forge import api, templates
 from pixel_forge.domain import Project
-from pixel_forge.errors import AssetNotFoundError, PathSecurityError
+from pixel_forge.errors import AssetNotFoundError, ExportError, PathSecurityError
 from pixel_forge.schemas import AssetType, GodotManifest, OperationSpec, parse_asset_doc
 
 ASSET_TYPES: tuple[AssetType, ...] = ("character", "enemy", "prop", "terrain")
@@ -28,6 +28,14 @@ def _make_broken_asset(root: Path, asset_id: str) -> None:
     not exist — parses fine, but rendering raises `PaletteError` (a `ForgeError`)."""
     data = templates.asset_template("character", asset_id)
     data["regions"]["block"]["shapes"][0]["color"] = "not_a_real_color"
+    Project.load(root).save_asset(parse_asset_doc(data))
+
+
+def _make_two_direction_asset(root: Path, asset_id: str) -> None:
+    """The starter character template with a second direction added, for exercising
+    per-direction preview fanout."""
+    data = templates.asset_template("character", asset_id)
+    data["directions"] = ["south", "north"]
     Project.load(root).save_asset(parse_asset_doc(data))
 
 
@@ -170,13 +178,15 @@ def test_render_is_deterministic(tmp_path: Path) -> None:
 # --- generate_preview --------------------------------------------------------------------------
 
 
-def test_generate_preview_writes_one_file_per_animation(tmp_path: Path) -> None:
+def test_generate_preview_writes_one_file_per_animation_direction(tmp_path: Path) -> None:
     root = _init(tmp_path)
-    api.new_asset(root, "character", "hero")
+    _make_two_direction_asset(root, "hero")
     result = api.generate_preview(root, "hero")
-    assert set(result.preview_paths) == {"idle"}
+    assert set(result.preview_paths) == {"idle_south", "idle_north"}
     for rel in result.preview_paths.values():
         assert (root / rel).is_file()
+    assert result.preview_paths["idle_south"].endswith("preview_idle_south.gif")
+    assert result.preview_paths["idle_north"].endswith("preview_idle_north.gif")
 
 
 def test_generate_preview_dry_run_writes_nothing(tmp_path: Path) -> None:
@@ -194,12 +204,20 @@ def test_generate_preview_dry_run_writes_nothing(tmp_path: Path) -> None:
 def test_export_godot_writes_and_round_trips(tmp_path: Path) -> None:
     root = _init(tmp_path)
     api.new_asset(root, "character", "hero")
+    api.render_asset(root, "hero")
     manifest = api.export_godot(root, "hero")
 
     forge_path = root / "build" / "godot" / "hero.forge.json"
     assert forge_path.is_file()
     reparsed = GodotManifest.model_validate_json(forge_path.read_text())
     assert reparsed == manifest
+
+
+def test_export_godot_without_render_raises(tmp_path: Path) -> None:
+    root = _init(tmp_path)
+    api.new_asset(root, "character", "hero")
+    with pytest.raises(ExportError, match="render_asset"):
+        api.export_godot(root, "hero")
 
 
 # --- apply_asset_operation / revisions --------------------------------------------------------
@@ -227,6 +245,27 @@ def test_apply_asset_operation_mutates_and_invalidates_build(tmp_path: Path) -> 
     # matches the edited spec: the next render must not skip.
     next_render = api.render_asset(root, "hero")
     assert next_render.skipped is False
+
+
+def test_apply_asset_operation_persists_validation_report(tmp_path: Path) -> None:
+    root = _init(tmp_path)
+    api.new_asset(root, "character", "hero")
+
+    # Push the region entirely off-canvas so validation finds a real (blocking) problem.
+    op = OperationSpec(
+        name="translate_region", params={"region": "block", "offset": [-1000, -1000]}
+    )
+    record = api.apply_asset_operation(root, "hero", op, timestamp="2026-01-01T00:00:00Z")
+    assert record.validation is not None
+    assert record.validation.blocking is True
+    assert any(f.rule_id == "PIX008" for f in record.validation.findings)
+
+    persisted = api.list_asset_revisions(root, "hero")[0].validation
+    assert persisted is not None
+    assert persisted.blocking is True
+    assert [f.rule_id for f in persisted.findings] == [
+        f.rule_id for f in record.validation.findings
+    ]
 
 
 def test_apply_asset_operation_dry_run_leaves_spec_untouched(tmp_path: Path) -> None:
