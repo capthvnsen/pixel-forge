@@ -23,12 +23,12 @@ author, render, validate, revise, and export assets on its own.
 
 ```
 Read AGENTS.md in this repository, then help me create a pixel art asset with
-Pixel Forge. Before writing any YAML, interview me using the question checklist in
-the "What your agent should ask you" section of README.md. Ask only the questions
-that apply to my asset type, and propose a sensible default for each one so I can
-just say "yes" to the ones I do not care about. Once I have answered, write the
-spec, render it, run validation, and fix anything blocking before showing me the
-result.
+Pixel Forge. Before writing any YAML, interview me using the question tables under
+"Using this with an AI agent" in README.md. Ask only the questions that apply to my
+asset type, and propose a sensible default for each one so I can just say "yes" to
+the ones I do not care about. Once I have answered, write the spec, render it, run
+validation, and fix anything blocking before showing me the result. Then show me
+the contact sheet and the preview GIF so I can give you notes.
 ```
 
 ### Step 2: your agent asks you these questions
