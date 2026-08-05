@@ -1,0 +1,14 @@
+__pycache__/
+*.py[cod]
+.venv/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+build/
+.superpowers/
+*.actual.png
+*.diff.png
+godot/.godot/
+godot/generated/
