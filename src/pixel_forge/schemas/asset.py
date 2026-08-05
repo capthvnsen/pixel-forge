@@ -10,6 +10,7 @@ from pixel_forge.errors import SchemaError
 from pixel_forge.schemas.animation import AnimationSpec
 from pixel_forge.schemas.common import Region, RegionTransform, Vec2
 from pixel_forge.schemas.palette import PaletteRef
+from pixel_forge.schemas.source import ExternalSource
 
 AssetType = Literal["character", "enemy", "prop", "terrain"]
 
@@ -73,9 +74,17 @@ class BaseAssetDoc(BaseModel):
 
 
 class SpriteAssetBase(BaseAssetDoc):
-    """Shared shape for the three directional/animated sprite asset kinds."""
+    """Shared shape for the three directional/animated sprite asset kinds.
+
+    `source` is optional and mutually exclusive with drawing: when it is set the
+    pixels come from pinned PNGs (`rendering.external.ExternalFrameBackend`) and
+    `regions` is expected to be empty, since nothing composites it. Everything else
+    on the document -- directions, mirroring, animations, anchors, palette -- means
+    exactly the same thing either way.
+    """
 
     directions: list[str]
+    source: ExternalSource | None = None
     mirror: dict[str, str] = Field(default_factory=dict)  # dst direction -> src direction
     anchors: dict[str, Vec2]
     regions: dict[str, Region]

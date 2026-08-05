@@ -381,3 +381,35 @@ lists: `collision_tiles`, `navigation_tiles`, `occlusion_tiles`.
 `godot_manifest`, `style_profile`, `revision_record`, and `project_config` —
 deterministic JSON Schema, `sort_keys=True` plus a trailing newline, byte-identical
 across runs.
+
+## `source` (external frame files)
+
+Optional on `character`, `enemy` and `prop`. When present, the asset's pixels come from
+PNGs on disk (`rendering.external.ExternalFrameBackend`) instead of from `regions`,
+which is then expected to be empty. Everything else on the document — `directions`,
+`mirror`, `animations`, `anchors`, `palette`, `export`, `validation` — means exactly
+what it means for a drawn asset, so validation, sheet packing, previews, per-direction
+pivots and the Godot manifest all work unchanged.
+
+| Field | Type | Default | Meaning |
+|---|---|---|---|
+| `frames_dir` | `str` | `"frames"` | Directory holding the frames, resolved under the **asset's own directory** via `safe_join`. Cannot escape it. |
+| `pattern` | `str` | `"{animation}_{direction}_{index}.png"` | Filename for one frame. Must reference all three placeholders and must be a bare filename, not a path. |
+| `pins` | `dict[str, str]` | `{}` | `"{animation}_{direction}_{index}" -> sha256` of the file. Written by `pixel-forge source pin`. |
+
+A frame whose direction appears in `mirror` reads its **source** direction's file and
+flips it, exactly as `LocalRenderBackend` does — it never looks for a file of its own,
+and it is never pinned. A direction with real artwork of its own should simply not be
+listed in `mirror`.
+
+Pins are optional so art can be iterated on before it is locked, but an unpinned
+external asset does not satisfy the `RenderBackend` determinism contract: nothing
+detects the pixels changing under an unchanged spec.
+
+```yaml
+source:
+  frames_dir: frames
+  pattern: "{animation}_{direction}_{index}.png"
+  pins:
+    walk_e_0: 4f3a...
+```

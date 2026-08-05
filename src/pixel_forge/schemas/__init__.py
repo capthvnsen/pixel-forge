@@ -70,6 +70,7 @@ from pixel_forge.schemas.revision import (
     RevisionDiff,
     RevisionRecord,
 )
+from pixel_forge.schemas.source import ExternalSource, pin_key
 from pixel_forge.schemas.style import ProvenanceEntry, StyleProfile
 from pixel_forge.schemas.validation import Finding, Severity, ValidationReport
 
@@ -93,6 +94,7 @@ __all__ = [
     "EnemyAsset",
     "EnemyCombat",
     "ExportOptions",
+    "ExternalSource",
     "Finding",
     "FrameSpec",
     "GodotAnimatedTileExport",
@@ -139,4 +141,5 @@ __all__ = [
     "Vec2",
     "export_json_schemas",
     "parse_asset_doc",
+    "pin_key",
 ]

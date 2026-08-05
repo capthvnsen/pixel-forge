@@ -476,6 +476,27 @@ def style_set_cmd(
     _emit(state, profile, _render_style_profile)
 
 
+def source_pin_cmd(
+    ctx: typer.Context,
+    asset_id: str = typer.Argument(..., help=_ASSET_ID_HELP),
+    timestamp: str | None = typer.Option(
+        None, "--timestamp", help="ISO-8601 UTC timestamp for the revision; defaults to now."
+    ),
+    root: Path = typer.Option(Path("."), "--root", help=_ROOT_HELP),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Compute the pins without writing them."),
+) -> None:
+    """Pin the current sha256 of an external-source asset's frame files."""
+    state = _state(ctx)
+    resolved_id = _normalize_asset_id(asset_id)
+    record = api.pin_asset_source(
+        root,
+        resolved_id,
+        timestamp=timestamp or _default_timestamp(),
+        dry_run=dry_run,
+    )
+    _emit(state, record, _render_revision_record)
+
+
 def schemas_export_cmd(
     ctx: typer.Context,
     out_dir: Path,

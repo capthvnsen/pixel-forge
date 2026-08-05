@@ -36,6 +36,7 @@ EXPECTED_TOOL_NAMES = {
     "create_asset",
     "update_asset_spec",
     "apply_asset_operation",
+    "pin_asset_source",
     "render_asset",
     "validate_asset",
     "generate_preview",

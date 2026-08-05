@@ -45,12 +45,15 @@ from pixel_forge.references import (
 )
 from pixel_forge.rendering import (
     Canvas,
+    ExternalFrameBackend,
+    RenderBackend,
     SheetCell,
     build_atlas,
     build_contact_sheet,
     build_seam_map,
     build_sprite_sheet,
     check_seams,
+    compute_source_pins,
     render_asset_frames,
     render_terrain_tiles,
 )
@@ -444,6 +447,14 @@ def _render_terrain(
     )
 
 
+def _sprite_backend(project: Project, doc: SpriteDoc) -> RenderBackend | None:
+    """The backend a sprite doc renders through: external when it pins files, else the
+    default shape-DSL one (signalled by None, which `render_asset_frames` resolves)."""
+    if doc.source is None:
+        return None
+    return ExternalFrameBackend(project.paths.asset_dir(doc.asset.id))
+
+
 def _render_sprite(project: Project, doc: SpriteDoc, *, force: bool, dry_run: bool) -> RenderResult:
     build_dir = project.paths.build_asset_dir(doc.asset.id)
     spec_hash = content_hash(doc)
@@ -481,7 +492,7 @@ def _render_sprite(project: Project, doc: SpriteDoc, *, force: bool, dry_run: bo
         )
 
     build_dir.mkdir(parents=True, exist_ok=True)
-    frames = render_asset_frames(doc)
+    frames = render_asset_frames(doc, _sprite_backend(project, doc))
     frames_dir.mkdir(parents=True, exist_ok=True)
     for f in resolved:
         canvas = frames[(f.animation, f.direction, f.index)]
@@ -535,7 +546,7 @@ def validate_asset(root: Path, asset_id: str) -> ValidationReport:
     doc = _load_doc(project, asset_id)
     if isinstance(doc, TerrainAsset):
         return _validation_report(doc, {}, render_terrain_tiles(doc))
-    return _validation_report(doc, render_asset_frames(doc), {})
+    return _validation_report(doc, render_asset_frames(doc, _sprite_backend(project, doc)), {})
 
 
 def generate_preview(
@@ -555,7 +566,7 @@ def generate_preview(
         )
     resolved_fmt = fmt or doc.export.preview_format
     build_dir = project.paths.build_asset_dir(asset_id)
-    frames = render_asset_frames(doc)
+    frames = render_asset_frames(doc, _sprite_backend(project, doc))
 
     all_frames = resolve_frames(doc)
     preview_paths: dict[str, str] = {}
@@ -610,7 +621,7 @@ def export_godot(root: Path, asset_id: str, *, dry_run: bool = False) -> GodotMa
             doc, texture_paths={"atlas": atlas_rel}, spec_hash=spec_hash, atlas_cells=atlas_cells
         )
     else:
-        frames = render_asset_frames(doc)
+        frames = render_asset_frames(doc, _sprite_backend(project, doc))
         resolved = resolve_frames(doc)
         sheet = build_sprite_sheet(
             [(f, frames[(f.animation, f.direction, f.index)]) for f in resolved],
@@ -645,7 +656,9 @@ def apply_asset_operation(
     if isinstance(doc_after, TerrainAsset):
         report = _validation_report(doc_after, {}, render_terrain_tiles(doc_after))
     else:
-        report = _validation_report(doc_after, render_asset_frames(doc_after), {})
+        report = _validation_report(
+            doc_after, render_asset_frames(doc_after, _sprite_backend(project, doc_after)), {}
+        )
 
     if dry_run:
         parent = head_revision(project.paths, asset_id)
@@ -704,6 +717,34 @@ def update_asset_spec(
     named operations in `apply_asset_operation` don't cover."""
     op = OperationSpec(name="replace_spec", params={"spec": dict(spec)})
     return apply_asset_operation(root, asset_id, op, timestamp=timestamp, dry_run=dry_run)
+
+
+def pin_asset_source(
+    root: Path, asset_id: str, *, timestamp: str, dry_run: bool = False
+) -> RevisionRecord:
+    """Record the sha256 of every file an external-source asset's authored frames
+    reference, as a `replace_spec` revision.
+
+    This is the step that makes externally-produced pixels behave like drawn ones: once
+    pinned, changing the art on disk changes the document hash, so the render cache
+    invalidates, the revision log shows the transition, and a file that changes without
+    a re-pin is a render error rather than a silent redefinition."""
+    project = _project(root)
+    doc = _load_doc(project, asset_id)
+    if isinstance(doc, TerrainAsset):
+        raise ForgeError(
+            f"asset {asset_id!r} is a terrain asset; external frame sources apply only "
+            "to character, enemy, and prop assets"
+        )
+    if doc.source is None:
+        raise ForgeError(
+            f"asset {asset_id!r} declares no `source:` block, so it has no external "
+            "frames to pin; it renders from `regions` via the shape DSL"
+        )
+    pins = compute_source_pins(doc, project.paths.asset_dir(asset_id))
+    spec = doc.model_dump(mode="json", exclude={"kind"})
+    spec["source"] = {**spec["source"], "pins": pins}
+    return update_asset_spec(root, asset_id, spec, timestamp=timestamp, dry_run=dry_run)
 
 
 def compare_asset_revisions(root: Path, asset_id: str, rev_a: str, rev_b: str) -> RevisionDiff:

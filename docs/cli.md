@@ -130,6 +130,25 @@ match `ASSET_ID`, one that fails schema validation, or one that touches a
 
 Text output/JSON: same `RevisionRecord` shape as `revise`.
 
+### `pixel-forge source pin ASSET_ID [--root ROOT] [--timestamp ISO8601] [--dry-run]`
+
+Records the sha256 of every frame file an external-source asset references, storing it
+in the spec's `source.pins` as a `replace_spec` revision (same audit trail as
+`update-spec`).
+
+An asset that declares a `source:` block gets its pixels from PNGs on disk rather than
+from the shape DSL. Pinning is what makes those pixels behave like drawn ones: the
+digests live in the document, so replacing a file changes `content_hash(doc)` — the
+render cache invalidates, the revision log shows the transition, and a file that
+changes *without* a re-pin is a `RenderError` rather than a silent redefinition. Run it
+after (re)generating art, then `render`/`build`.
+
+Raises if the asset declares no `source:` block, if it is a terrain asset, or if any
+referenced file is missing. Mirrored directions are never pinned — they have no file of
+their own, being their source direction's raster flipped.
+
+Text output/JSON: the same `RevisionRecord` shape `revise` produces.
+
 ### `pixel-forge operations`
 
 Lists every operation `revise` understands: name, params, description. No `--root`

@@ -24,11 +24,15 @@ export_app = typer.Typer(no_args_is_help=True, help="Export build artifacts for 
 references_app = typer.Typer(no_args_is_help=True, help="Manage the reference-art library.")
 style_app = typer.Typer(no_args_is_help=True, help="Inspect and edit the project style profile.")
 schemas_app = typer.Typer(no_args_is_help=True, help="Generate machine-readable schema files.")
+source_app = typer.Typer(
+    no_args_is_help=True, help="Manage externally-produced frame files for an asset."
+)
 
 app.add_typer(export_app, name="export")
 app.add_typer(references_app, name="references")
 app.add_typer(style_app, name="style")
 app.add_typer(schemas_app, name="schemas")
+app.add_typer(source_app, name="source")
 
 
 def _version_callback(value: bool) -> None:
@@ -75,4 +79,5 @@ export_app.command("godot")(commands.guarded(commands.export_godot_cmd))
 references_app.command("init")(commands.guarded(commands.references_init_cmd))
 style_app.command("show")(commands.guarded(commands.style_show_cmd))
 style_app.command("set")(commands.guarded(commands.style_set_cmd))
+source_app.command("pin")(commands.guarded(commands.source_pin_cmd))
 schemas_app.command("export")(commands.guarded(commands.schemas_export_cmd))

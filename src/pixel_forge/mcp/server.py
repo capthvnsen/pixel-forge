@@ -167,6 +167,25 @@ def update_asset_spec(asset_id: str, spec: dict[str, JSONValue], timestamp: str)
     return _guard(lambda: api.update_asset_spec(_root(), asset_id, spec, timestamp=timestamp))
 
 
+@mcp_server.tool()
+def pin_asset_source(asset_id: str, timestamp: str) -> RevisionRecord:
+    """Record the sha256 of every frame file an external-source asset references, and
+    store it in the spec as an auditable `replace_spec` revision.
+
+    Assets that declare a `source:` block get their pixels from PNGs on disk instead of
+    from the shape DSL — art produced by a diffusion model, a pixel artist, or an older
+    pipeline. Pinning is what makes those pixels behave like drawn ones: once pinned,
+    replacing a file changes the document's content hash, so the render cache
+    invalidates and the revision log shows the transition. A file that changes without
+    a re-pin becomes a loud render error rather than a silent redefinition.
+
+    Call this after (re)generating art, then `render_asset` or `build_asset`. Raises if
+    the asset declares no `source:` block, if it is a terrain asset, or if any
+    referenced file is missing.
+    """
+    return _guard(lambda: api.pin_asset_source(_root(), asset_id, timestamp=timestamp))
+
+
 # --- rendering ---------------------------------------------------------------------------------
 
 

@@ -297,13 +297,22 @@ Stated honestly, read against the code:
   the shipped examples cleanly, not validated against a broad corpus of
   hand-drawn pixel art. Expect false positives on busy or organic art and false
   negatives on subtler mistakes. Full rule table: `docs/validation.md`.
-- **The only render backend is the local deterministic shape-DSL renderer.**
-  `RenderBackend` is a Protocol seam left open for a future generative-image or
-  vision-model backend, but no such backend ships here.
+- **No generative render backend ships.** Two backends exist: the local
+  deterministic shape-DSL renderer, and `ExternalFrameBackend`, which loads pinned
+  PNGs produced elsewhere (see `source:` in `docs/schema.md`). The `RenderBackend`
+  Protocol remains the seam for a future generative-image or vision-model backend,
+  but nothing here calls a model.
 - **Per-direction art is transform overrides, not independent artwork.** A sprite has
   one shared `regions` map. `direction_overrides` can change visibility, offset,
   colour, and size per direction, but cannot give two directions genuinely different
-  silhouettes the way independently drawn art would.
+  silhouettes the way independently drawn art would. An asset that declares `source:`
+  sidesteps this entirely, since each direction is its own file.
+- **Frame transforms are shared by every direction.** `AnimationSpec.frames[].transforms`
+  has no direction dimension and `direction_overrides` has no frame dimension, so all
+  directions of one animation replay identical motion. A sixteen-direction walk has one
+  stride, which reads correctly in profile and wrongly head-on.
+- **`scale_size` applies uniformly to every shape in a region**, so the smallest shape
+  caps how far the whole region can be scaled before hitting the 1x1 floor.
 - **Revision operations apply to sprite assets only, not terrain.** Terrain specs must
   be edited by hand or replaced wholesale via `update_asset_spec`.
 - **The toolkit performs no image analysis of reference art.** It scaffolds reference
