@@ -1,44 +1,160 @@
 # Pixel Forge
 
-A headless, AI-native pixel-art asset production toolkit for Godot 4. It is a
-structured production system, not an image generator and not a drawing app: assets
-are described as a structured YAML spec (palette, anchors, layered regions, a small
-shape DSL, per-frame transforms), rendered deterministically into PNGs, checked by an
-automated validation rule set, and exported into Godot 4 via a neutral JSON manifest
-plus an editor plugin — never hand-authored `.tres`/`.tscn` files. See
-`docs/adr/0001-architecture.md` for the full architecture rationale, and `AGENTS.md`
-if you are a coding agent editing this repository.
+A headless, AI-native pixel-art asset production toolkit for Godot 4.
+
+It is a structured production system, not an image generator and not a drawing app.
+You describe an asset as a YAML spec (palette, anchors, layered regions, a small shape
+DSL, per-frame transforms). Pixel Forge renders it deterministically into sprite
+sheets and previews, checks it against an automated rule set, records every edit as a
+reversible revision, and exports it into Godot 4 through an editor plugin. No
+hand-authored `.tres` or `.tscn` files, ever.
+
+The point: **the editable source of an asset is a structured document, not a PNG.**
+That is what makes an AI agent able to edit it precisely ("widen the backpack by two
+pixels across all directions without moving the feet") instead of regenerating the
+whole thing and hoping.
+
+## Using this with an AI agent
+
+This repo is built to be handed to a coding agent. Point your agent at it and it can
+author, render, validate, revise, and export assets on its own.
+
+### Step 1: give your agent this prompt
+
+```
+Read AGENTS.md in this repository, then help me create a pixel art asset with
+Pixel Forge. Before writing any YAML, interview me using the question checklist in
+the "What your agent should ask you" section of README.md. Ask only the questions
+that apply to my asset type, and propose a sensible default for each one so I can
+just say "yes" to the ones I do not care about. Once I have answered, write the
+spec, render it, run validation, and fix anything blocking before showing me the
+result.
+```
+
+### Step 2: your agent asks you these questions
+
+This is the checklist. A good agent proposes a default for every line so you only
+have to answer the ones you actually care about.
+
+**Every asset (ask these first)**
+
+| Question | Why it matters | Common default |
+|---|---|---|
+| What is this asset, in one sentence? | Drives region breakdown | none |
+| Which type: character, enemy, prop, or terrain? | Picks the schema | character |
+| Canvas size in pixels? | Fixed per asset, hard to change later | 32x32 or 64x64 |
+| What is the camera angle? | Recorded as `perspective` | three-quarter top-down |
+| Do you have a palette, or should one be proposed? | Every colour must be declared up front | propose one |
+| Maximum colour count? | Enforced by rule `PIX005` | 24 |
+
+**Characters and enemies**
+
+| Question | Why it matters | Common default |
+|---|---|---|
+| Which facing directions? | Drives the whole sheet size | south, west, east, north |
+| Can east be a mirror of west? | Halves the work, exercises `mirror` | yes |
+| Which animations, and how many frames each? | idle, walk, attack, and so on | idle 4, walk 4, attack 4 |
+| How fast should each animation run? | Per-frame milliseconds | 160ms idle, 100ms walk |
+| Which row is the ground line? | `baseline_y`, kept pixel-stable | 2 to 6 px above the bottom |
+| What attaches to this asset, and where? | Becomes named anchors | feet, head, weapon hand |
+| Which of those must never move when you edit? | Becomes protected anchors | feet, weapon hand |
+| Which parts are separate layers? | Becomes named regions you can edit alone | shadow, body, head, held item |
+
+**Enemies also**
+
+| Question | Why it matters | Common default |
+|---|---|---|
+| Does it telegraph before attacking? | Fairness cue, gets its own animation | yes |
+| Does it have a hurt reaction and a death? | Extra animations, death does not loop | yes |
+| On which frames does damage land? | Becomes frame events for your game code | contact frame of attack |
+
+**Animated props**
+
+| Question | Why it matters | Common default |
+|---|---|---|
+| What stays completely still? | The static base region | the base |
+| What moves, and how? | Bob, spin, swing, or open | one moving part |
+| Does anything blink or pulse? | Visibility toggles or colour swaps | a lamp |
+| Should any effect be a Godot shader instead of frames? | Energy pulses, shimmer, holograms | one shader effect |
+
+**Terrain and tilesets**
+
+| Question | Why it matters | Common default |
+|---|---|---|
+| Tile size? | Fixed for the whole set | 16x16 |
+| Which terrain types? | grass, dirt, stone, water | grass and dirt |
+| Which pairs need transitions between them? | Generates the 8 edge and corner masks | every adjacent pair |
+| Any animated tiles? | Water, lava, and similar | water, 3 frames |
+| Which tiles block movement or sight? | Collision, navigation, occlusion hints for Godot | water blocks movement |
+| Do you want a sample map to look at? | A small demo scene proving it tiles | yes, 8x8 |
+
+**Quality bar (ask once, applies to everything)**
+
+| Question | Why it matters | Common default |
+|---|---|---|
+| Must the feet and anchors stay pixel-stable across frames? | Stops sprites from sliding | yes |
+| Is antialiasing allowed? | Pixel art usually says no | no |
+| Which Godot version? | Plugin baseline | 4.4 |
+
+### Step 3: your agent builds it
+
+With the answers, the agent writes `assets/<id>/<id>.yaml` and runs:
+
+```bash
+uv run pixel-forge render <id> --root .      # spec to pixels
+uv run pixel-forge validate <id> --root .    # exit code 1 if anything is blocking
+uv run pixel-forge preview <id> --root .     # animated GIF to look at
+uv run pixel-forge build <id> --root .       # all of the above plus the Godot manifest
+```
+
+`validate` is the feedback loop. It returns machine-readable findings with a rule id,
+a severity, the exact frame and region at fault, a measurement, and a suggested fix,
+so the agent can correct the spec and re-run without asking you anything. Show your
+agent the contact sheet or the preview GIF and it can iterate on your notes.
+
+### Step 4: you ask for changes in plain language
+
+Edits are semantic operations on named regions, not image edits. Ask for something
+like "widen the backpack by two pixels everywhere but do not move the feet or the
+weapon hand", and the agent runs:
+
+```bash
+uv run pixel-forge revise engineer \
+  --operation resize_region --param region=backpack --param 'delta=[2,0]' \
+  --protect feet --protect weapon --root examples
+```
+
+Every edit is recorded with a revision id, before and after hashes, and an inverse, so
+it can be reversed and diffed. The full operation catalogue is in `docs/revisions.md`.
 
 ## Requirements
 
 - Python 3.12+
 - [`uv`](https://docs.astral.sh/uv/)
-- Godot 4.4+ for the editor plugin (not required to author, render, validate, or
-  revise assets — only to import them into a Godot project)
+- Godot 4.4+ for the editor plugin. Not needed to author, render, validate, or revise
+  assets, only to import them into a Godot project.
 
 ## Install
 
 ```bash
+git clone https://github.com/capthvnsen/pixel-forge.git
+cd pixel-forge
 uv sync
 uv run pixel-forge --version
 ```
 
-Every command below is invoked as `uv run pixel-forge ...` from the repository root
-(the entry point is registered as `pixel-forge = "pixel_forge.cli.main:app"` in
-`pyproject.toml`). Full command reference: `docs/cli.md`.
+Full command reference: `docs/cli.md`.
 
 ## Quick start
 
-A complete workflow: create a project, create an asset, render it, validate it,
-preview it, export it, revise it, rebuild. Every block below is the real output of
-running these exact commands.
+Every block below is real output from these exact commands.
 
 ```console
 $ uv run pixel-forge init ./demo --name demo
 initialised project 'demo' at /path/to/demo
 
 $ uv run pixel-forge new character hero --root ./demo
-hero (character): 2 frame(s), spec_hash=2e44719c5f6f445dc5e2c514c30673b01dcf91ecbe7496b53f450718a5de7edb
+hero (character): 2 frame(s), spec_hash=2e44719c5f6f445d...
   spec: assets/hero/hero.yaml
   directions: south
   animations: idle
@@ -56,50 +172,35 @@ $ uv run pixel-forge preview hero --root ./demo
 hero: format=gif
   idle_south: build/hero/preview_idle_south.gif
 
-$ uv run pixel-forge export godot hero --root ./demo
-hero (character): spec_hash=2e44719c5f6f445dc5e2c514c30673b01dcf91ecbe7496b53f450718a5de7edb
-  texture[sheet]: build/hero/hero_sheet.png
-  animations: idle_south
-
-$ uv run pixel-forge revise hero \
-    --operation translate_region --param region=block --param 'offset=[1,0]' \
-    --timestamp 2026-08-05T12:00:00Z --root ./demo
-e771348e3959: translate_region on hero at 2026-08-05T12:00:00Z
-  hash: 2e44719c5f6f445dc5e2c514c30673b01dcf91ecbe7496b53f450718a5de7edb -> dbab27abcd7b95cb6e2b43af59cc343252de27bf7c23bde7620b32533519f4ff
-  regions: block
-
 $ uv run pixel-forge build hero --root ./demo
-hero (character): spec_hash=dbab27abcd7b95cb6e2b43af59cc343252de27bf7c23bde7620b32533519f4ff
+hero (character): spec_hash=2e44719c5f6f445d...
   contact_sheet: build/hero/hero_contact.png
   sheet: build/hero/hero_sheet.png
   godot: build/godot/hero.forge.json
   validation: 0 error(s), 0 warning(s)
 ```
 
-`build` is the single-command version of render + preview + export; `render` and
-`build` are both cached against the spec's content hash, so re-running either without
-`--force` after a no-op edit is a no-op (`skipped: true`). `PIX010`'s `INFO` finding
-is expected for a starter template — it just means no palette colour has declared a
-lighting `role`/`ramp` yet (see `docs/validation.md`).
+`build` is render plus preview plus export in one command. Both `render` and `build`
+are cached against the spec's content hash, so re-running after a no-op edit does
+nothing (`skipped: true`) unless you pass `--force`. Rendering is deterministic:
+the same spec produces byte-identical PNGs on every run and on every machine.
 
-The `--operation`/`--param` shape (and the full operation catalogue: `resize_region`,
-`translate_region`, `recolor_region`, `set_frame_duration`, `add_frame`,
-`remove_frame`, `set_region_visibility`) is documented in `docs/revisions.md`, along
-with a worked, non-trivial example (widening a region on a real four-direction
-character without touching its feet, weapon, or palette) and the exact revision
-record it produces.
+Add `--json` before any subcommand for structured output instead of text.
 
-Add `--json` (before the subcommand, e.g. `pixel-forge --json inspect hero --root .`)
-to any command for structured output instead of the text form above.
+## The four worked examples
 
-## The four shipped examples
+`examples/` is a real, buildable project with one worked spec per asset type:
 
-`examples/` contains one worked spec per asset type: `engineer` (character, four
-directions with mirroring), `crawler` (enemy, combat metadata), `beacon` (prop,
-layered transform + procedural-shader animation), `forest_tileset` (terrain, full
-8-mask transitions, animated water, a sample map). Each has its own
-`examples/assets/<name>/README.md` explaining exactly what it demonstrates and why
-its validation findings (all `warning`/`info`, never blocking) are expected.
+- **`engineer`** (character): four directions with east mirrored from west, idle, walk
+  and attack, stable feet, attachment anchors, per-direction equipment visibility.
+- **`crawler`** (enemy): idle, move, telegraph, attack, impact, death, with frame
+  events for hitboxes and combat metadata.
+- **`beacon`** (prop): a static base, a moving vane, a blinking lamp, and one
+  procedural shader effect exported as Godot metadata.
+- **`forest_tileset`** (terrain): grass, dirt, all eight transition masks, animated
+  water, adjacency metadata, seam tests, and a sample map.
+
+Each has its own README explaining what it demonstrates.
 
 ```bash
 uv run pixel-forge build-all --root examples
@@ -115,26 +216,24 @@ built 4 asset(s), 16 finding(s) total
 
 ## Importing into Godot
 
-Full instructions, including manual verification steps and known Godot-side
-limitations: `docs/godot.md`. Short version: the sample project at `godot/` ships the
-`pixel_asset_forge` plugin pre-enabled; point its dock at a directory of
-`*.forge.json` manifests (produced by `export godot`/`build`) and click Import, or run
-headlessly:
+The sample project at `godot/` ships the `pixel_asset_forge` plugin. Point its dock at
+a directory of `*.forge.json` manifests (produced by `export godot` or `build`) and
+click Import, or run it headlessly:
 
 ```bash
 tools/godot_headless_import.sh [MANIFEST_DIR]
 ```
 
+The plugin builds `SpriteFrames`, `AnimationPlayer` animations, `TileSet` with terrain
+peering bits and animated tiles, and a sample `TileMapLayer`, all through Godot's own
+APIs. It writes only under `res://generated/<asset_id>/`, never touching your own
+resources, and a reimport updates in place so existing scene references keep working.
+Full instructions and manual verification steps: `docs/godot.md`.
+
 ## Running the MCP server
 
-Full tool reference and a worked agent workflow: `docs/mcp.md`.
-
-```bash
-uv run python -m pixel_forge.mcp.server /path/to/project
-# or: PIXEL_FORGE_PROJECT=/path/to/project uv run python -m pixel_forge.mcp.server
-```
-
-Sample client config block (a generic stdio MCP client; exact keys vary by client):
+Agents can drive the whole toolkit through MCP instead of the CLI. Full tool
+reference and a worked agent workflow: `docs/mcp.md`.
 
 ```json
 {
@@ -147,91 +246,84 @@ Sample client config block (a generic stdio MCP client; exact keys vary by clien
 }
 ```
 
-The project root is fixed once at server startup — never a per-tool parameter — so a
-calling agent cannot point any tool outside the project the server was launched
-against.
+The project root is fixed once at server startup and is never a per-tool parameter, so
+a calling agent cannot point any tool outside the project it was launched against.
+There is no shell tool and no arbitrary file access.
 
 ## Architecture
 
 ```
-schemas            pydantic models: the spec, palette, animation, revisions,
-                    build/Godot manifests, validation report, style profile
+schemas       pydantic models: spec, palette, animation, revisions, manifests,
+              validation report, style profile
    |
-domain              paths/project lifecycle, palette resolution, geometry,
-                     content hashing, YAML I/O  (pure, no framework deps)
+domain        paths and project lifecycle, palette resolution, geometry,
+              content hashing, YAML I/O   (pure, no framework deps)
    |
-animation            spec -> resolved (direction x animation x frame) expansion
+animation     spec -> resolved (direction x animation x frame) expansion
    |
 rendering / validation / preview / revisions / exporters.godot
-   |  shape DSL -> pixels (RenderBackend Protocol seam)
-   |  rule engine: PIX0xx / ANI0xx / TIL0xx
-   |  deterministic GIF/WebP writers
-   |  operation registry + append-only revision log
-   |  AssetDocUnion -> neutral *.forge.json manifest
+   |   shape DSL -> pixels (RenderBackend Protocol seam)
+   |   rule engine: PIX0xx / ANI0xx / TIL0xx
+   |   deterministic GIF and WebP writers
+   |   operation registry + append-only revision log
+   |   AssetDocUnion -> neutral *.forge.json manifest
    |
-api.py               the one service layer: every function below is pydantic-in,
-                      pydantic-out, no printing, no sys.exit, no clock reads
+api.py        the one service layer: pydantic in, pydantic out, no printing,
+              no sys.exit, no clock reads
    |
-  +-- cli/            Typer app: one function per command, calls exactly one
-  |                    api.py function, renders the result
-  +-- mcp/             MCP server: one @tool per api.py function, returns the
-                        result unchanged
+  +-- cli/    Typer app: one function per command, calls exactly one api function
+  +-- mcp/    MCP server: one tool per api function, returns the result unchanged
 ```
 
-Every layer above `api.py` is a thin renderer of the same calls; see
-`docs/adr/0001-architecture.md` for why this shape was chosen and what it costs.
+The CLI and the MCP server are thin renderers of the same calls, which is what
+guarantees they behave identically. See `docs/adr/0001-architecture.md` for why this
+shape was chosen and what it costs. If you are a coding agent editing this repository,
+read `AGENTS.md` first.
 
 ## Known limitations
 
-Read honestly against the code, not softened:
+Stated honestly, read against the code:
 
-- **Heuristic validation rules are untuned against real art.** `PIX006`-`PIX010`,
-  `ANI005`/`ANI006`/`ANI008`, and `TIL007` all use thresholds (e.g. `PIX007`'s 10%
-  minority-edge-colour cutoff, `ANI005`'s 35% loop-pop threshold, `ANI008`'s 40%
-  silhouette-volume-change threshold) chosen to pass the four shipped examples
-  cleanly, not validated against a broader corpus of hand-drawn pixel art. Expect
-  false positives on legitimately busy/organic art and false negatives on subtler
-  mistakes. See `docs/validation.md` for the full rule table.
-- **The only render backend is the local, deterministic shape-DSL renderer.**
-  `RenderBackend`/`TileRenderBackend` (`rendering/backend.py`) are a `Protocol` seam
-  deliberately left open for a future generative-image or vision-model backend, but
-  no such backend ships — `LocalRenderBackend` is the only implementation in this
-  repository.
-- **Per-direction art is expressed as transform overrides, not independent
-  per-direction artwork.** A sprite asset has exactly one `regions`/`anchors` map,
-  shared by every non-mirrored direction; `direction_overrides` can toggle visibility,
-  offset, colour, or size deltas per direction, but cannot give two directions a
-  genuinely different silhouette the way independently hand-drawn per-direction art
-  would. See `examples/assets/engineer/README.md`'s "Schema limitation hit" section
-  for where this was hit directly.
-- **Revision operations apply to sprite assets only, not terrain.** Every operation
-  handler in `revisions/operations.py` raises `OperationError` against a `TerrainAsset`
-  — there is currently no revision catalogue for tile edits; a terrain spec must be
-  hand-edited or replaced wholesale (MCP `update_asset_spec`).
-- **The toolkit performs no image analysis of reference art.** `references/profile.py`
-  scaffolds directories and stores/merges structured style judgements, but nothing in
-  this codebase reads pixels out of a reference image — a vision-capable agent (or a
-  human) is expected to look at the references and write the style profile. See
-  `docs/references.md`.
-- **The manifest cannot express some Godot tile-animation arrangements.** Godot's
-  `TileSetAtlasSource` animation model requires an animated tile's frames to occupy a
-  contiguous horizontal atlas strip; the neutral manifest schema instead lists
-  arbitrary already-named tile ids as frames (to let an animated tile reuse
-  already-declared static tiles, e.g. a water shimmer cycling through existing tiles).
-  When a tile's frames don't form such a strip, the Godot plugin leaves that tile
-  static and emits a warning rather than misbehaving — see `docs/godot.md`'s "Known
-  limitations" for this and several more Godot-side specifics (texture filtering,
-  per-tile terrain assignment, prop `SpriteFrames`).
-- **A few schema fields are accepted but currently unused.** `ExportOptions.godot`,
-  `ProjectConfig.default_palette`, and `OperationSpec.targets` all exist in the
-  schema and are not read as a gate or otherwise acted on anywhere in `api.py` (not
-  verified to have any effect on behaviour) — they're forward-looking schema surface,
-  not yet wired to anything.
-- **`test-seams` output is unfiltered and grows quadratically.** For N terrain tiles
-  it prints `4N²` lines (every tile pair, every edge); usable directly for small
-  tilesets, meant to be consumed via `--json` or piped through `grep`/`sort` for
-  larger ones.
+- **Heuristic validation rules are untuned against real art.** `PIX006` through
+  `PIX010`, `ANI005`, `ANI006`, `ANI008`, and `TIL007` use thresholds chosen to pass
+  the four shipped examples cleanly, not validated against a broad corpus of
+  hand-drawn pixel art. Expect false positives on busy or organic art and false
+  negatives on subtler mistakes. Full rule table: `docs/validation.md`.
+- **The only render backend is the local deterministic shape-DSL renderer.**
+  `RenderBackend` is a Protocol seam left open for a future generative-image or
+  vision-model backend, but no such backend ships here.
+- **Per-direction art is transform overrides, not independent artwork.** A sprite has
+  one shared `regions` map. `direction_overrides` can change visibility, offset,
+  colour, and size per direction, but cannot give two directions genuinely different
+  silhouettes the way independently drawn art would.
+- **Revision operations apply to sprite assets only, not terrain.** Terrain specs must
+  be edited by hand or replaced wholesale via `update_asset_spec`.
+- **The toolkit performs no image analysis of reference art.** It scaffolds reference
+  directories and stores structured style judgements, but a vision-capable agent or a
+  human has to look at the references and write the style profile. See
+  `docs/references.md`, which also carries the no-tracing policy.
+- **Rollback is implemented but not yet exposed.** `revert_revision` is tested and
+  works, but is not wired into the CLI or MCP surface yet, so revisions are currently
+  recorded and diffable but not one-command reversible.
+- **A few schema fields are accepted but unused.** `ExportOptions.godot`,
+  `ProjectConfig.default_palette`, and `OperationSpec.targets` are forward-looking
+  surface not yet wired to behaviour.
+- **`test-seams` output grows quadratically.** For N tiles it prints 4N² lines. Use
+  `--json` for anything but a small tileset.
+- **The example art is deliberately simple.** Technical completeness was the goal, not
+  visual sophistication. The attack animation in particular reads much like idle.
+- **Verified on Godot 4.7.1.** The declared 4.4 baseline uses no newer APIs knowingly,
+  but has not been independently tested on a 4.4 binary.
+
+## Development
+
+```bash
+uv run pytest                 # 429 tests
+uv run mypy                   # strict, clean
+uv run ruff check src tests
+uv run ruff format --check src tests
+```
 
 ## License
 
-MIT — see `pyproject.toml`.
+MIT
