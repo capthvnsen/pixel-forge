@@ -1,4 +1,4 @@
-"""End-to-end coverage for `examples/character/engineer.yaml`.
+"""End-to-end coverage for `examples/assets/engineer/engineer.yaml`.
 
 Drives the real pipeline directly (load -> resolve -> render -> validate),
 the same path `pixel_forge.api` will wire up, without importing `api` itself
@@ -17,7 +17,9 @@ from pixel_forge.rendering.local import render_asset_frames
 from pixel_forge.schemas import CharacterAsset
 from pixel_forge.validation.engine import RuleContext, run_validation
 
-ASSET_PATH = Path(__file__).resolve().parents[2] / "examples" / "character" / "engineer.yaml"
+ASSET_PATH = (
+    Path(__file__).resolve().parents[2] / "examples" / "assets" / "engineer" / "engineer.yaml"
+)
 
 
 def _load() -> CharacterAsset:

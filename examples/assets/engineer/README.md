@@ -33,9 +33,9 @@ clean against the real rules in `src/pixel_forge/validation/`.
 ## Building it (once the CLI lands)
 
 ```sh
-pixel-forge render examples/character/engineer.yaml
-pixel-forge validate examples/character/engineer.yaml
-pixel-forge preview examples/character/engineer.yaml --animation walk
+pixel-forge render examples/assets/engineer/engineer.yaml
+pixel-forge validate examples/assets/engineer/engineer.yaml
+pixel-forge preview examples/assets/engineer/engineer.yaml --animation walk
 ```
 
 Until then, the pipeline is driven directly:
@@ -44,7 +44,7 @@ Until then, the pipeline is driven directly:
 from pixel_forge.domain.loader import load_asset_doc
 from pixel_forge.rendering.local import render_asset_frames
 
-doc = load_asset_doc(Path("examples/character/engineer.yaml"))
+doc = load_asset_doc(Path("examples/assets/engineer/engineer.yaml"))
 frames = render_asset_frames(doc)  # {(animation, direction, index): Canvas}
 ```
 

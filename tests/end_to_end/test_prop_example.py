@@ -1,4 +1,4 @@
-"""End-to-end proof that examples/animated_prop/beacon.yaml renders and validates
+"""End-to-end proof that examples/assets/beacon/beacon.yaml renders and validates
 clean, and that it actually exercises layered transform animation, a genuine
 blink (not just a colour swap), and a surviving procedural shader block."""
 
@@ -13,7 +13,7 @@ from pixel_forge.rendering.local import render_asset_frames
 from pixel_forge.schemas import PropAsset
 from pixel_forge.validation.engine import RuleContext, run_validation
 
-ASSET_PATH = Path(__file__).resolve().parents[2] / "examples" / "animated_prop" / "beacon.yaml"
+ASSET_PATH = Path(__file__).resolve().parents[2] / "examples" / "assets" / "beacon" / "beacon.yaml"
 
 # The "base" region's own shapes only ever occupy this sub-rectangle (see the
 # layout note at the top of beacon.yaml); no other region's pixels ever land here.

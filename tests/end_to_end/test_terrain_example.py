@@ -1,4 +1,4 @@
-"""End-to-end proof that examples/terrain/forest_tileset.yaml renders and
+"""End-to-end proof that examples/assets/forest_tileset/forest_tileset.yaml renders and
 validates clean, every tile is seamless against itself, the atlas packs
 deterministically, and the sample map/transitions are internally consistent."""
 
@@ -14,7 +14,13 @@ from pixel_forge.rendering.sheet import build_atlas, check_seams
 from pixel_forge.schemas import TerrainAsset
 from pixel_forge.validation.engine import RuleContext, run_validation
 
-ASSET_PATH = Path(__file__).resolve().parents[2] / "examples" / "terrain" / "forest_tileset.yaml"
+ASSET_PATH = (
+    Path(__file__).resolve().parents[2]
+    / "examples"
+    / "assets"
+    / "forest_tileset"
+    / "forest_tileset.yaml"
+)
 
 
 def _load() -> TerrainAsset:

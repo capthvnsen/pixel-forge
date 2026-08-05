@@ -31,9 +31,9 @@ A worked, hand-authored example for `asset.type: enemy`, exercising the
 ## Building it (once the CLI lands)
 
 ```sh
-pixel-forge render examples/enemy/crawler.yaml
-pixel-forge validate examples/enemy/crawler.yaml
-pixel-forge preview examples/enemy/crawler.yaml --animation attack
+pixel-forge render examples/assets/crawler/crawler.yaml
+pixel-forge validate examples/assets/crawler/crawler.yaml
+pixel-forge preview examples/assets/crawler/crawler.yaml --animation attack
 ```
 
 Until then, the pipeline is driven directly:
@@ -42,7 +42,7 @@ Until then, the pipeline is driven directly:
 from pixel_forge.domain.loader import load_asset_doc
 from pixel_forge.rendering.local import render_asset_frames
 
-doc = load_asset_doc(Path("examples/enemy/crawler.yaml"))
+doc = load_asset_doc(Path("examples/assets/crawler/crawler.yaml"))
 frames = render_asset_frames(doc)  # {(animation, direction, index): Canvas}
 ```
 
