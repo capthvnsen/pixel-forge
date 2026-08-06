@@ -1,0 +1,294 @@
+# Pixel Asset Forge example: "warden", a 48x48 character drawn with bitmap regions.
+#
+# Where `vanguard` proves bitmap regions work at all, this one is a deliberate
+# attempt at the ceiling: a five-step steel ramp, a hard ink outline, a rim
+# highlight on the light side, gold trim, and a lit visor. Same pipeline as every
+# other asset here.
+schema_version: 1
+
+asset:
+  id: warden
+  type: character
+  canvas: [48, 48]
+  perspective: three_quarter_top_down
+  logical_pixel_scale: 1
+  baseline_y: 45
+
+palette:
+  id: warden_palette
+  colors:
+    - { id: ink, hex: "#0e1016", role: outline }
+    - { id: steel_hi, hex: "#cdd6e4", ramp: steel, role: light }
+    - { id: steel_lite, hex: "#97a3b8", ramp: steel }
+    - { id: steel_mid, hex: "#64718c", ramp: steel }
+    - { id: steel_dark, hex: "#3d465e", ramp: steel }
+    - { id: steel_deep, hex: "#232a3c", ramp: steel, role: shadow }
+    - { id: gold, hex: "#e0a43a", ramp: gold, role: light }
+    - { id: gold_dark, hex: "#9c6b1e", ramp: gold, role: shadow }
+    - { id: visor, hex: "#6ff0d8", ramp: visor, role: light }
+    - { id: visor_dim, hex: "#2a9e8f", ramp: visor, role: shadow }
+    - { id: shadow, hex: "#07080c", role: shadow }
+
+directions: [south, west, east, north]
+mirror:
+  east: west
+
+anchors:
+  feet: [24, 45]
+  legs: [24, 33]
+  torso: [24, 18]
+  head: [24, 6]
+  pauldron_l: [18, 19]
+  pauldron_r: [30, 19]
+  right_hand: [33, 31]
+  left_arm: [15, 22]
+  right_arm: [33, 22]
+
+regions:
+  left_arm:
+    anchor: left_arm
+    layer: 18
+    shapes:
+      - op: bitmap
+        at: [-2, 0]
+        key: { o: ink, H: steel_hi, L: steel_lite, M: steel_mid }
+        rows:
+          - "oLLLo"
+          - "oLLLo"
+          - "oLLLo"
+          - "oLLLo"
+          - "oLLMo"
+          - "oLLMo"
+          - "oLMMo"
+          - "oHHLo"
+          - "ooooo"
+
+  right_arm:
+    anchor: right_arm
+    layer: 18
+    shapes:
+      - op: bitmap
+        at: [-2, 0]
+        key: { o: ink, L: steel_lite, M: steel_mid, D: steel_dark, P: steel_deep }
+        rows:
+          - "oMDDo"
+          - "oMDDo"
+          - "oMDDo"
+          - "oMDDo"
+          - "oMDPo"
+          - "oMDPo"
+          - "oDDPo"
+          - "oLMDo"
+          - "ooooo"
+
+  shadow:
+    anchor: feet
+    layer: 0
+    shapes:
+      - { op: ellipse, color: shadow, at: [-9, -3], size: [18, 4] }
+
+  legs:
+    anchor: legs
+    layer: 10
+    shapes:
+      - op: bitmap
+        at: [-8, 0]
+        key: { o: ink, H: steel_hi, L: steel_lite, M: steel_mid, D: steel_dark, P: steel_deep }
+        rows:
+          - ".oLMMLo..oMDDPo."
+          - ".oLMMLo..oMDDPo."
+          - ".oLMMLo..oMDDPo."
+          - ".oHLLMo..oLMDPo."
+          - ".oPPPPo..oPPPPo."
+          - ".oLMMLo..oMDDPo."
+          - ".oLMMLo..oMDDPo."
+          - ".oLMMLo..oMDDPo."
+          - ".oHLLMo..oLMDPo."
+          - ".oHHLLo..oLLMDo."
+          - ".oooooo..oooooo."
+
+  pauldron_l:
+    anchor: pauldron_l
+    layer: 25
+    shapes:
+      - op: bitmap
+        at: [-3, 0]
+        key: { o: ink, H: steel_hi, L: steel_lite, M: steel_mid, g: gold }
+        rows:
+          - "..oooo"
+          - ".oHHLo"
+          - "oHHLLo"
+          - "oHLLMo"
+          - ".ogggo"
+          - "..ooo."
+
+  pauldron_r:
+    anchor: pauldron_r
+    layer: 25
+    shapes:
+      - op: bitmap
+        at: [-3, 0]
+        key: { o: ink, M: steel_mid, D: steel_dark, P: steel_deep, G: gold_dark }
+        rows:
+          - "oooo.."
+          - "oMMDo."
+          - "oMDDDo"
+          - "oDDDPo"
+          - "oGGGo."
+          - ".oooo."
+
+  torso:
+    anchor: torso
+    layer: 20
+    shapes:
+      - op: bitmap
+        at: [-8, 0]
+        key:
+          o: ink
+          H: steel_hi
+          L: steel_lite
+          M: steel_mid
+          D: steel_dark
+          P: steel_deep
+          g: gold
+          G: gold_dark
+        rows:
+          - "....oooooooo...."
+          - "..ooHHLLMMDDoo.."
+          - ".oHHLLLLMMMDDDo."
+          - ".oHLLLLgGMMDDDPo"
+          - ".oHLLLggGGMDDDPo"
+          - ".oHLLggggGGMDDPo"
+          - ".oHLLLggGGMDDDPo"
+          - ".oHLLLLgGMMDDDPo"
+          - ".oHLLLLLMMMDDDPo"
+          - ".oHLLLLMMMMDDDPo"
+          - "..oLLLMMMMDDDPo."
+          - "..oPPPPPPPPPPPo."
+          - "..oGggggggggGGo."
+          - "..oPPPPPPPPPPPo."
+          - "...oooooooooo..."
+
+  head:
+    anchor: head
+    layer: 30
+    shapes:
+      - op: bitmap
+        at: [-7, 0]
+        key:
+          o: ink
+          H: steel_hi
+          L: steel_lite
+          M: steel_mid
+          D: steel_dark
+          v: visor
+          V: visor_dim
+          g: gold
+        rows:
+          - "....oooooo...."
+          - "...oHHLLMMo..."
+          - "..oHHLLLMMMDo."
+          - ".oHHLLLLMMMDDo"
+          - ".oHLLLLLMMMDDo"
+          - ".oHLggggggMDDo"
+          - ".oHLoooooooDDo"
+          - ".oHLvvvvvVVoDo"
+          - ".oHLoooooooDDo"
+          - ".oHLLLMMMMMDDo"
+          - "..oLLMMMMMDDo."
+          - "...oooooooooo."
+
+  weapon:
+    anchor: right_hand
+    layer: 40
+    shapes:
+      - op: bitmap
+        at: [-7, -3]
+        key: { o: ink, H: steel_hi, L: steel_lite, M: steel_mid, D: steel_dark, g: gold }
+        rows:
+          - "...oooooooo..."
+          - "..oMLHHHHLMo.."
+          - ".oMMLHHHHLMMo."
+          - ".oDDDDDDDDgMo."
+          - "..oDDDDDDDDo.."
+          - "...oooooooo..."
+
+direction_overrides:
+  north:
+    head: { color_swap: { visor: steel_lite, visor_dim: steel_mid } }
+    torso: { color_swap: { gold: steel_lite, gold_dark: steel_mid } }
+
+animations:
+  idle:
+    loop: true
+    frames:
+      - {
+          duration_ms: 220,
+          transforms: { torso: { offset: [0, 0] }, head: { offset: [0, 0] } },
+        }
+      - {
+          duration_ms: 220,
+          transforms: { torso: { offset: [0, -1] }, head: { offset: [0, -1] } },
+        }
+      - {
+          duration_ms: 220,
+          transforms: { torso: { offset: [0, -1] }, head: { offset: [0, -1] } },
+        }
+      - {
+          duration_ms: 220,
+          transforms: { torso: { offset: [0, 0] }, head: { offset: [0, 0] } },
+        }
+
+  walk:
+    loop: true
+    frames:
+      - {
+          duration_ms: 120,
+          transforms:
+            {
+              torso: { offset: [0, -1] },
+              head: { offset: [0, -1] },
+              pauldron_l: { offset: [0, -1] },
+              pauldron_r: { offset: [0, 0] },
+            },
+        }
+      - {
+          duration_ms: 120,
+          transforms:
+            {
+              torso: { offset: [0, 0] },
+              head: { offset: [0, 0] },
+              pauldron_l: { offset: [0, 0] },
+              pauldron_r: { offset: [0, 0] },
+            },
+        }
+      - {
+          duration_ms: 120,
+          transforms:
+            {
+              torso: { offset: [0, -1] },
+              head: { offset: [0, -1] },
+              pauldron_l: { offset: [0, 0] },
+              pauldron_r: { offset: [0, -1] },
+            },
+        }
+      - {
+          duration_ms: 120,
+          transforms:
+            {
+              torso: { offset: [0, 0] },
+              head: { offset: [0, 0] },
+              pauldron_l: { offset: [0, 0] },
+              pauldron_r: { offset: [0, 0] },
+            },
+        }
+
+export:
+  preview_format: gif
+  preview_loop: true
+
+validation:
+  palette_limit: 24
+  require_stable_baseline: true
+  require_stable_anchors: true
+  allow_antialiasing: false

@@ -23,6 +23,26 @@ built 6 asset(s), 146 finding(s) total
 
 ## Gallery
 
+### What changed
+
+Left to right: `engineer` (shape primitives), `vanguard` (bitmap regions, 32x32),
+`warden` (bitmap regions, 48x48, five-step ramp). Same renderer, same anchors, same
+animation system, same Godot export. Only the pixel source differs.
+
+<img src="previews/art_progression.png" width="900" alt="engineer, vanguard and warden side by side">
+
+The shape DSL cannot produce an outline, a tonal ramp, or a form that is not a
+rectangle or an ellipse. That is the whole gap.
+
+### `warden` — character, 48x48
+
+<img src="previews/warden_walk.gif" width="144" alt="warden walk animation"> <img src="previews/warden_contact.png" width="380" alt="warden contact sheet">
+
+A five-step steel ramp, gold trim, a lit visor, and a hard ink outline. `east` is
+mirrored from `west`, so the weapon changes hands for free. `north` uses `color_swap`
+on the bitmaps' palette keys to turn the visor and the gold to steel when the
+character faces away. See [`assets/warden/README.md`](assets/warden/README.md).
+
 ### `vanguard` — character, drawn with bitmap regions
 
 Every other sprite here is built from `rect` and `ellipse` primitives and looks like

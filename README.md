@@ -192,6 +192,8 @@ Add `--json` before any subcommand for structured output instead of text.
 `examples/` is a real, buildable project covering every asset type. See
 [`examples/README.md`](examples/README.md) for the gallery with rendered previews.
 
+- **`warden`** (character): 48x48 bitmap regions with a five-step steel ramp, gold
+  trim and a lit visor. The current high-water mark for art quality in this repo.
 - **`vanguard`** (character): drawn with `op: bitmap` regions instead of primitives,
   so it has outlines, three-step tonal ramps and non-rectangular forms. The proof that
   art quality and pipeline are separable.
@@ -216,7 +218,7 @@ uv run pixel-forge build-all --root examples
 ```
 
 ```
-built 7 asset(s), 242 finding(s) total
+built 8 asset(s), 323 finding(s) total
   beacon: ok
   crawler: ok
   engineer: ok
@@ -224,6 +226,7 @@ built 7 asset(s), 242 finding(s) total
   rune_chest: ok
   sporeling: ok
   vanguard: ok
+  warden: ok
 ```
 
 ## Importing into Godot
