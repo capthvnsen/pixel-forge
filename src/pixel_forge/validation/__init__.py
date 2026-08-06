@@ -6,6 +6,7 @@ from __future__ import annotations
 from pixel_forge.validation import (
     rules_animation,  # noqa: F401
     rules_pixel,  # noqa: F401
+    rules_source,  # noqa: F401
     rules_tileset,  # noqa: F401
 )
 from pixel_forge.validation.engine import (

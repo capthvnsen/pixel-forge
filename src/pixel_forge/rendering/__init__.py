@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pixel_forge.rendering.backend import RenderBackend, TileRenderBackend
 from pixel_forge.rendering.canvas import Canvas
-from pixel_forge.rendering.external import ExternalFrameBackend, compute_source_pins
+from pixel_forge.rendering.external import ExternalFrameBackend, compute_source_pins, verify_pins
 from pixel_forge.rendering.local import (
     LocalRenderBackend,
     render_asset_frames,
@@ -40,4 +40,5 @@ __all__ = [
     "draw_shape",
     "render_asset_frames",
     "render_terrain_tiles",
+    "verify_pins",
 ]

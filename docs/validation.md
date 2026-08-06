@@ -59,6 +59,18 @@ validation pass.
 | `TIL006` | warning | deterministic | Tiles within one `TerrainSet` should all declare the same `collision` value. | Make every tile in a terrain set agree on its `collision` metadata. |
 | `TIL007` | warning | heuristic | Excessive repetition: in a `sample_map` layer, the single most frequent tile's share of all cells exceeds `validation.max_repeat_ratio` (default 0.6). | Vary tile placement; a single dominant tile reads as repetitive. Or raise `max_repeat_ratio`. |
 
+## External-source rules (`SRC0xx`) — sprites with a `source:` block
+
+These only apply to assets whose pixels come from PNGs on disk via
+`ExternalFrameBackend`. They exist because that backend ignores parts of the spec the
+shape-DSL renderer honours, and a spec edit that silently does nothing is worse than
+one that fails.
+
+| Rule | Severity | Kind | Checks | How to fix / relax |
+|---|---|---|---|---|
+| `SRC001` | warning | deterministic | A `source:` asset declares non-empty `regions`, `direction_overrides`, or per-frame `transforms`. The external backend reads none of them, so the declaration has no effect on the rendered output. | Remove the declaration, or drop `source:` and render the asset from the shape DSL. Composite and transform work has to happen in the art itself when the pixels come from files. |
+| `SRC002` | warning | deterministic | A direction listed in `mirror` also has its own frame file present on disk. The mirror table wins and that file is never read. | Either remove the direction from `mirror` so its own art is used, or delete the unused file. |
+
 ## Engine-level finding
 
 | Rule | Severity | Kind | Meaning |

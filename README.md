@@ -302,10 +302,14 @@ Stated honestly, read against the code:
   hand-drawn pixel art. Expect false positives on busy or organic art and false
   negatives on subtler mistakes. Full rule table: `docs/validation.md`.
 - **No generative render backend ships.** Two backends exist: the local
-  deterministic shape-DSL renderer, and `ExternalFrameBackend`, which loads pinned
-  PNGs produced elsewhere (see `source:` in `docs/schema.md`). The `RenderBackend`
-  Protocol remains the seam for a future generative-image or vision-model backend,
-  but nothing here calls a model.
+  deterministic shape-DSL renderer, and `ExternalFrameBackend`, which loads PNGs
+  produced elsewhere (see `source:` in `docs/schema.md`). A **pinned** frame's file is
+  checked against its recorded sha256 on every render, including a cached one, so
+  drifting art is a loud `RenderError` rather than a stale build. An **unpinned**
+  `source:` asset satisfies none of that: `render`/`build` never cache it, and nothing
+  stops the pixels from changing underneath an unchanged spec. The `RenderBackend`
+  Protocol remains the seam for a future generative-image or vision-model backend, but
+  nothing here calls a model.
 - **Per-direction art is transform overrides, not independent artwork.** A sprite has
   one shared `regions` map. `direction_overrides` can change visibility, offset,
   colour, and size per direction, but cannot give two directions genuinely different

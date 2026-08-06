@@ -402,9 +402,13 @@ flips it, exactly as `LocalRenderBackend` does — it never looks for a file of 
 and it is never pinned. A direction with real artwork of its own should simply not be
 listed in `mirror`.
 
-Pins are optional so art can be iterated on before it is locked, but an unpinned
-external asset does not satisfy the `RenderBackend` determinism contract: nothing
-detects the pixels changing under an unchanged spec.
+Pins are optional so art can be iterated on before it is locked. Once a frame is
+pinned, its file's sha256 is checked against the recorded pin on every `render`/
+`build` call, including one `spec_hash` alone would let skip as already cached — so a
+file that changed underneath its pin is a `RenderError`, with or without `--force`.
+An **unpinned** `source:` asset has nothing to check against: it does not satisfy the
+`RenderBackend` determinism contract, and `render`/`build` never treat it as cached —
+every call re-renders from whatever is on disk at that moment.
 
 ```yaml
 source:

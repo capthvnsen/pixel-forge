@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Literal
 
 from pixel_forge.animation.resolver import ResolvedFrame
@@ -28,6 +29,10 @@ class RuleContext:
     frames: Mapping[tuple[str, str, int], Canvas]  # (animation, direction, index) -> canvas
     resolved: Sequence[ResolvedFrame]
     tiles: Mapping[str, Canvas]  # terrain only, empty for sprites
+    # The asset's own directory, for rules that need to check the filesystem directly
+    # (e.g. SRC002 checking for a stray frame file) rather than a rendered Canvas. None
+    # in tests that build a RuleContext without a real project on disk.
+    asset_dir: Path | None = None
 
 
 Rule = Callable[[RuleContext], list[Finding]]

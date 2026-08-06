@@ -83,9 +83,45 @@ def test_pinning_records_a_revision_and_changes_the_spec_hash(tmp_path: Path) ->
 def test_replacing_art_under_a_pin_fails_the_next_render(tmp_path: Path) -> None:
     root = _project(tmp_path)
     api.pin_asset_source(root, "hero", timestamp=TS)
+    api.render_asset(root, "hero")  # establish the cache the next call must not trust
     _frame(root / "assets" / "hero" / "frames" / "idle_e_0.png", shift=2)
     with pytest.raises(RenderError, match="does not match its pin"):
-        api.render_asset(root, "hero", force=True)
+        api.render_asset(root, "hero")
+
+
+def test_replacing_art_under_a_pin_fails_the_next_build_without_force(tmp_path: Path) -> None:
+    """The reported bug, reproduced: a build cached by spec_hash alone must not serve
+    stale pixels once pinned art changes on disk, even without --force."""
+    root = _project(tmp_path)
+    api.pin_asset_source(root, "hero", timestamp=TS)
+    api.build_asset(root, "hero")
+    _frame(root / "assets" / "hero" / "frames" / "idle_e_0.png", shift=2)
+    with pytest.raises(RenderError, match="does not match its pin"):
+        api.build_asset(root, "hero")
+
+
+def test_pinned_and_unchanged_asset_still_skips_on_the_second_call(tmp_path: Path) -> None:
+    root = _project(tmp_path)
+    api.pin_asset_source(root, "hero", timestamp=TS)
+    first = api.render_asset(root, "hero")
+    assert not first.skipped
+    second = api.render_asset(root, "hero")
+    assert second.skipped
+
+
+def test_unpinned_source_is_never_cached_and_picks_up_changed_art(tmp_path: Path) -> None:
+    root = _project(tmp_path)
+    first = api.render_asset(root, "hero")
+    assert not first.skipped
+    second = api.render_asset(root, "hero")
+    assert not second.skipped, "an unpinned source: asset has nothing to verify a cache against"
+
+    sheet = root / "build" / "hero" / "hero_sheet.png"
+    before = sheet.read_bytes()
+    _frame(root / "assets" / "hero" / "frames" / "idle_e_0.png", shift=2)
+    third = api.render_asset(root, "hero")
+    assert not third.skipped
+    assert sheet.read_bytes() != before, "changed art must show up without a pin or --force"
 
 
 def test_repinning_accepts_new_art_and_re_renders(tmp_path: Path) -> None:
@@ -93,16 +129,19 @@ def test_repinning_accepts_new_art_and_re_renders(tmp_path: Path) -> None:
     api.pin_asset_source(root, "hero", timestamp=TS)
     _frame(root / "assets" / "hero" / "frames" / "idle_e_0.png", shift=2)
     api.pin_asset_source(root, "hero", timestamp="2026-08-05T13:00:00+00:00")
-    assert api.render_asset(root, "hero", force=True).frames_written == 4
+    assert api.render_asset(root, "hero").frames_written == 4
     revisions = api.list_asset_revisions(root, "hero")
     assert [r.operation.name for r in revisions] == ["replace_spec", "replace_spec"]
 
 
 def test_render_is_byte_identical_across_runs(tmp_path: Path) -> None:
+    """Genuinely about --force: without it the second call would just skip via the
+    cache, which would make the byte comparison trivial rather than proving two
+    independent render invocations agree."""
     root = _project(tmp_path)
     api.pin_asset_source(root, "hero", timestamp=TS)
     sheet = root / "build" / "hero" / "hero_sheet.png"
-    api.render_asset(root, "hero", force=True)
+    api.render_asset(root, "hero")
     first = sheet.read_bytes()
     api.render_asset(root, "hero", force=True)
     assert sheet.read_bytes() == first
@@ -110,7 +149,7 @@ def test_render_is_byte_identical_across_runs(tmp_path: Path) -> None:
 
 def test_build_exports_a_godot_manifest(tmp_path: Path) -> None:
     root = _project(tmp_path)
-    manifest = api.build_asset(root, "hero", force=True)
+    manifest = api.build_asset(root, "hero")
     godot = root / "build" / "godot" / "hero.forge.json"
     assert godot.is_file()
     assert manifest.output_paths.get("godot")

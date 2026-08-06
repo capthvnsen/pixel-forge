@@ -7,11 +7,15 @@ the toolkit: validation rules, sheet packing, per-direction pivots, the Godot ma
 and a revision log.
 
 `pins` is what keeps `RenderBackend`'s determinism contract honest for pixels this
-repo did not draw. Every referenced file's sha256 is recorded in the spec, so changing
-the art on disk changes the *document's* content hash exactly as editing a shape
-would. Caching, revision hashes and "render twice, compare bytes" all keep working
-without knowing that a backend read a file, and art that changes underneath a spec is
-a loud error instead of a silent redefinition.
+repo did not draw. Every referenced file's sha256 is recorded in the spec, and every
+render verifies the files on disk against those pins -- including a render that would
+otherwise be served from cache, since a pin drifting does not move the document's own
+content hash. Art that changes underneath a spec is therefore a loud error rather than
+a silent redefinition, and re-pinning is the explicit act that accepts new pixels.
+
+An **unpinned** `source:` asset does not satisfy the determinism contract: nothing can
+detect that its art changed, so such an asset is never served from cache and is always
+re-rendered.
 """
 
 from __future__ import annotations

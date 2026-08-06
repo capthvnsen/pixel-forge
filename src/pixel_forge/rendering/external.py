@@ -29,6 +29,61 @@ from pixel_forge.schemas.asset import SpriteAssetBase
 from pixel_forge.schemas.source import pin_key
 
 
+def _check_frame_file(
+    path: Path,
+    name: str,
+    frames_dir: str,
+    animation: str,
+    direction: str,
+    index: int,
+    pinned: str | None,
+) -> None:
+    """Raise `RenderError` if `path` is missing, or (when `pinned` is given) if its
+    sha256 no longer matches. Shared by `ExternalFrameBackend._load` and `verify_pins`
+    so a pin mismatch raises identically whether discovered while actually rendering
+    or while deciding if a cached build can still be trusted."""
+    if not path.is_file():
+        raise RenderError(
+            f"external frame not found for {animation}/{direction}/{index}: "
+            f"expected {frames_dir}/{name} under the asset directory"
+        )
+    if pinned is not None:
+        digest = file_hash(path)
+        if digest != pinned:
+            raise RenderError(
+                f"external frame {name!r} does not match its pin "
+                f"(spec pins {pinned[:12]}..., file is {digest[:12]}...). The art "
+                "changed underneath this spec; re-run `pixel-forge source pin` to "
+                "accept the new pixels, which records it as a revision"
+            )
+
+
+def verify_pins(doc: SpriteAssetBase, asset_dir: Path) -> None:
+    """Raise `RenderError` if any pinned external frame is missing or has drifted from
+    its recorded sha256, without decoding any image.
+
+    This is what lets a cache hit on `spec_hash` stay honest: `spec_hash` never moves
+    when a file on disk changes without a re-pin, so `api.py` calls this before
+    trusting a cached build for a `source:` asset. A doc with no `source` block or no
+    pins yet is a no-op -- an unpinned asset has nothing here to verify.
+    """
+    source = doc.source
+    if source is None or not source.pins:
+        return
+    for frame in resolve_frames(doc):
+        if frame.mirrored_from is not None:
+            continue
+        key = pin_key(frame.animation, frame.direction, frame.index)
+        pinned = source.pins.get(key)
+        if pinned is None:
+            continue
+        name = source.filename(frame.animation, frame.direction, frame.index)
+        path = safe_join(asset_dir, source.frames_dir, name)
+        _check_frame_file(
+            path, name, source.frames_dir, frame.animation, frame.direction, frame.index, pinned
+        )
+
+
 class ExternalFrameBackend:
     name = "external"
 
@@ -59,23 +114,10 @@ class ExternalFrameBackend:
         if cached is not None:
             return cached.copy()
 
-        if not path.is_file():
-            raise RenderError(
-                f"external frame not found for {animation}/{direction}/{index}: "
-                f"expected {source.frames_dir}/{name} under the asset directory"
-            )
-
         key = pin_key(animation, direction, index)
-        pinned = source.pins.get(key)
-        if pinned is not None:
-            digest = file_hash(path)
-            if digest != pinned:
-                raise RenderError(
-                    f"external frame {name!r} does not match its pin "
-                    f"(spec pins {pinned[:12]}..., file is {digest[:12]}...). The art "
-                    "changed underneath this spec; re-run `pixel-forge source pin` to "
-                    "accept the new pixels, which records it as a revision"
-                )
+        _check_frame_file(
+            path, name, source.frames_dir, animation, direction, index, source.pins.get(key)
+        )
 
         with Image.open(path) as img:
             canvas = Canvas.from_image(img.convert("RGBA"))

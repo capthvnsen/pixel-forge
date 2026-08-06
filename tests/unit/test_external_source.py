@@ -98,7 +98,7 @@ def test_wrong_size_file_is_rejected_against_the_declared_canvas(tmp_path: Path)
 def test_frames_dir_cannot_escape_the_asset_directory(tmp_path: Path) -> None:
     doc = _doc(tmp_path)
     doc.source.frames_dir = "../../elsewhere"
-    with pytest.raises(PathSecurityError):
+    with pytest.raises(PathSecurityError, match="path escapes project root"):
         _render(doc, tmp_path / "assets" / "hero")
 
 

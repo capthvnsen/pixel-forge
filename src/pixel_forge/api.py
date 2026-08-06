@@ -60,6 +60,7 @@ from pixel_forge.rendering import (
     compute_source_pins,
     render_asset_frames,
     render_terrain_tiles,
+    verify_pins,
 )
 from pixel_forge.rendering.annotate import annotate_frame, build_annotated_contact, upscale_view
 from pixel_forge.rendering.ingest import extract_palette, load_image, png_to_bitmap
@@ -293,13 +294,17 @@ def _summary(project: Project, doc: AssetDocUnion) -> AssetSummary:
 
 
 def _validation_report(
+    project: Project,
     doc: AssetDocUnion,
     frames: Mapping[tuple[str, str, int], Canvas],
     tiles: Mapping[str, Canvas],
 ) -> ValidationReport:
     palette = resolve_palette(doc.palette)
     resolved: Sequence[ResolvedFrame] = [] if isinstance(doc, TerrainAsset) else resolve_frames(doc)
-    ctx = RuleContext(doc=doc, palette=palette, frames=frames, resolved=resolved, tiles=tiles)
+    asset_dir = project.paths.asset_dir(doc.asset.id)
+    ctx = RuleContext(
+        doc=doc, palette=palette, frames=frames, resolved=resolved, tiles=tiles, asset_dir=asset_dir
+    )
     return run_validation(ctx)
 
 
@@ -477,7 +482,7 @@ def _render_terrain(
         cell_size=tile_size,
         cells=_cells_manifest(list(atlas_cells.values())),
     )
-    report = _validation_report(doc, {}, tile_canvases)
+    report = _validation_report(project, doc, {}, tile_canvases)
 
     return _finish_render(
         build_dir,
@@ -491,6 +496,24 @@ def _render_terrain(
         frame_paths=[],
         frames_written=len(tile_canvases),
     )
+
+
+def _cached_build_is_trustworthy(project: Project, doc: AssetDocUnion) -> bool:
+    """Whether a manifest cache hit on `spec_hash` can be trusted without re-rendering.
+
+    Always true for shape-DSL and terrain docs. For a `source:` doc, `spec_hash` never
+    moves when the art on disk changes without a re-pin, so a cache hit alone would
+    serve stale pixels -- true only once `verify_pins` confirms every pinned file still
+    matches (it raises the same `RenderError` an actual render would, on a mismatch or
+    a missing file). An *unpinned* source doc has nothing to verify against, so it is
+    never treated as cacheable.
+    """
+    if isinstance(doc, TerrainAsset) or doc.source is None:
+        return True
+    if not doc.source.pins:
+        return False
+    verify_pins(doc, project.paths.asset_dir(doc.asset.id))
+    return True
 
 
 def _sprite_backend(project: Project, doc: SpriteDoc) -> RenderBackend | None:
@@ -526,7 +549,12 @@ def _render_sprite(project: Project, doc: SpriteDoc, *, force: bool, dry_run: bo
     contact_sheet_path = _rel(project.root, build_dir / f"{doc.asset.id}_contact.png")
 
     existing = _existing_manifest(build_dir)
-    if not force and existing is not None and existing.spec_hash == spec_hash:
+    if (
+        not force
+        and existing is not None
+        and existing.spec_hash == spec_hash
+        and _cached_build_is_trustworthy(project, doc)
+    ):
         return RenderResult(
             asset_id=doc.asset.id,
             spec_hash=spec_hash,
@@ -569,7 +597,7 @@ def _render_sprite(project: Project, doc: SpriteDoc, *, force: bool, dry_run: bo
         cell_size=doc.asset.canvas,
         cells=_cells_manifest(list(sheet.cells)),
     )
-    report = _validation_report(doc, frames, {})
+    report = _validation_report(project, doc, frames, {})
 
     return _finish_render(
         build_dir,
@@ -603,8 +631,10 @@ def validate_asset(root: Path, asset_id: str) -> ValidationReport:
     project = _project(root)
     doc = _load_doc(project, asset_id)
     if isinstance(doc, TerrainAsset):
-        return _validation_report(doc, {}, render_terrain_tiles(doc))
-    return _validation_report(doc, render_asset_frames(doc, _sprite_backend(project, doc)), {})
+        return _validation_report(project, doc, {}, render_terrain_tiles(doc))
+    return _validation_report(
+        project, doc, render_asset_frames(doc, _sprite_backend(project, doc)), {}
+    )
 
 
 def generate_preview(
@@ -712,10 +742,13 @@ def apply_asset_operation(
     doc_after, inverse = apply_operation(doc_before, op)
 
     if isinstance(doc_after, TerrainAsset):
-        report = _validation_report(doc_after, {}, render_terrain_tiles(doc_after))
+        report = _validation_report(project, doc_after, {}, render_terrain_tiles(doc_after))
     else:
         report = _validation_report(
-            doc_after, render_asset_frames(doc_after, _sprite_backend(project, doc_after)), {}
+            project,
+            doc_after,
+            render_asset_frames(doc_after, _sprite_backend(project, doc_after)),
+            {},
         )
 
     if dry_run:
@@ -1208,6 +1241,7 @@ def build_asset(
         and cached is not None
         and cached.spec_hash == spec_hash
         and _GODOT_OUTPUT_KEY in cached.output_paths
+        and _cached_build_is_trustworthy(project, doc)
     ):
         return cached
 
