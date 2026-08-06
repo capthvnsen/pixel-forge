@@ -382,6 +382,67 @@ def test_import_region_direction_exits_three(tmp_path: Path) -> None:
     assert "direction" in result.stderr
 
 
+def _compass8_sheet() -> Image.Image:
+    img = Image.new("RGBA", (30, 30), (30, 30, 30, 255))
+    for row, col in [(0, 0), (0, 1), (0, 2), (1, 0), (1, 2), (2, 0), (2, 1), (2, 2)]:
+        for y in range(row * 10 + 6, row * 10 + 10):
+            for x in range(col * 10 + 3, col * 10 + 7):
+                img.putpixel((x, y), (255, 0, 0, 255))
+    return img
+
+
+def test_import_sheet_exits_zero_and_json_parses_then_build_exits_zero(tmp_path: Path) -> None:
+    root = _init(tmp_path)
+    _compass8_sheet().save(root / "sheet.png")
+
+    result = _invoke(
+        "--json",
+        "import-sheet",
+        "trooper",
+        "--from",
+        "sheet.png",
+        "--grid",
+        "3x3",
+        "--layout",
+        "compass8",
+        "--canvas",
+        "20",
+        "--baseline",
+        "15",
+        "--root",
+        str(root),
+    )
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.stdout)
+    assert payload["asset_id"] == "trooper"
+    assert len(payload["directions"]) == 8
+    assert not payload["dry_run"]
+
+    build_result = _invoke("build", "trooper", "--root", str(root))
+    assert build_result.exit_code == 0, build_result.output
+
+
+def test_import_sheet_refuses_to_overwrite_without_replace(tmp_path: Path) -> None:
+    root = _init(tmp_path)
+    _compass8_sheet().save(root / "sheet.png")
+    args = (
+        "import-sheet",
+        "trooper",
+        "--from",
+        "sheet.png",
+        "--grid",
+        "3x3",
+        "--layout",
+        "compass8",
+        "--root",
+        str(root),
+    )
+    assert _invoke(*args).exit_code == 0
+    result = _invoke(*args)
+    assert result.exit_code == 3
+    assert "already exists" in result.stderr
+
+
 # --- build-all ------------------------------------------------------------------------------------
 
 

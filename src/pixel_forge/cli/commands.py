@@ -23,6 +23,7 @@ from pydantic import BaseModel, ValidationError
 from pixel_forge import api
 from pixel_forge.domain import load_yaml
 from pixel_forge.errors import ForgeError
+from pixel_forge.rendering.sheet_import import Layout
 from pixel_forge.schemas import (
     AssetManifest,
     AssetType,
@@ -146,6 +147,18 @@ def _parse_vec2(raw: str, *, option_name: str) -> tuple[int, int]:
     except ValueError as exc:
         raise typer.BadParameter(
             f"must be two ints X,Y, got {raw!r}", param_hint=option_name
+        ) from exc
+
+
+def _parse_dims(raw: str, *, option_name: str) -> tuple[int, int]:
+    parts = raw.lower().split("x")
+    if len(parts) != 2:
+        raise typer.BadParameter(f"must be AxB, got {raw!r}", param_hint=option_name)
+    try:
+        return (int(parts[0]), int(parts[1]))
+    except ValueError as exc:
+        raise typer.BadParameter(
+            f"must be two ints AxB, got {raw!r}", param_hint=option_name
         ) from exc
 
 
@@ -471,6 +484,84 @@ def extract_palette_cmd(
     state = _state(ctx)
     palette = api.extract_palette_from_png(root, png_path, max_colors=max_colors)
     _emit(state, palette, _render_palette)
+
+
+def import_sheet_cmd(
+    ctx: typer.Context,
+    asset_id: str = typer.Argument(..., help=_ASSET_ID_HELP),
+    png_path: str = typer.Option(
+        ..., "--from", help="Source grid-sheet PNG path, resolved against --root."
+    ),
+    grid: str | None = typer.Option(
+        None, "--grid", help="Grid layout as COLSxROWS (e.g. 3x3). Mutually exclusive with --cell."
+    ),
+    cell: str | None = typer.Option(
+        None, "--cell", help="Cell size as WxH (e.g. 80x80). Mutually exclusive with --grid."
+    ),
+    layout: Layout | None = typer.Option(
+        None, "--layout", help="Built-in direction layout. Mutually exclusive with --directions."
+    ),
+    directions: str | None = typer.Option(
+        None,
+        "--directions",
+        help=(
+            "Comma-separated direction names, consumed row-major over the sheet's "
+            "non-empty cells. Mutually exclusive with --layout."
+        ),
+    ),
+    scale: int = typer.Option(
+        1, "--scale", min=1, help="Downscale factor; verifies an exact NxN upscale first."
+    ),
+    canvas: int = typer.Option(48, "--canvas", min=1, help="Output canvas size (square), px."),
+    baseline: int = typer.Option(
+        44, "--baseline", min=0, help="Canvas row every sprite's lowest opaque pixel lands on."
+    ),
+    background: str = typer.Option(
+        "auto", "--background", help="'auto', 'transparent', or a literal '#rrggbb'."
+    ),
+    animation: str = typer.Option(
+        "idle", "--animation", help="Animation name the imported frames are written under."
+    ),
+    frame_duration: int = typer.Option(200, "--frame-duration", min=1, help="Per-frame ms."),
+    frames_per_cell: int = typer.Option(
+        1, "--frames-per-cell", min=1, help="Horizontal frame-strip count per cell."
+    ),
+    palette_limit: int = typer.Option(
+        24, "--palette-limit", min=1, help="Max distinct colours before this raises."
+    ),
+    replace: bool = typer.Option(False, "--replace", help="Overwrite an existing asset id."),
+    root: Path = typer.Option(Path("."), "--root", help=_ROOT_HELP),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Compute the import without writing anything."
+    ),
+) -> None:
+    """Import a hand-authored directional grid sheet (diffusion model or artist output)
+    into per-direction frame PNGs plus a pinned `source:` asset spec."""
+    state = _state(ctx)
+    resolved_id = _normalize_asset_id(asset_id)
+    grid_dims = _parse_dims(grid, option_name="--grid") if grid is not None else None
+    cell_dims = _parse_dims(cell, option_name="--cell") if cell is not None else None
+    direction_list = [d.strip() for d in directions.split(",")] if directions is not None else None
+    result = api.import_sheet(
+        root,
+        resolved_id,
+        png_path,
+        grid=grid_dims,
+        cell=cell_dims,
+        layout=layout,
+        directions=direction_list,
+        scale=scale,
+        canvas=canvas,
+        baseline=baseline,
+        background=background,
+        animation=animation,
+        frame_duration_ms=frame_duration,
+        frames_per_cell=frames_per_cell,
+        palette_limit=palette_limit,
+        replace=replace,
+        dry_run=dry_run,
+    )
+    _emit(state, result, _render_sheet_import_result)
 
 
 def view_cmd(
@@ -811,6 +902,17 @@ def _render_palette(p: Palette) -> str:
     lines = [f"{p.id}: {len(p.colors)} colour(s)"]
     for c in p.colors:
         lines.append(f"  {c.id}: {c.hex}")
+    return "\n".join(lines)
+
+
+def _render_sheet_import_result(r: api.SheetImportResult) -> str:
+    lines = [
+        f"{r.asset_id}: {len(r.directions)} direction(s)" + (" (dry-run)" if r.dry_run else "")
+    ]
+    lines.append(f"  directions: {', '.join(r.directions)}")
+    lines.append(f"  cells: {r.cells_total} total, {r.cells_skipped} skipped")
+    lines.append(f"  canvas={r.canvas} baseline={r.baseline} palette={r.palette_size} colour(s)")
+    lines.append(f"  frames: {len(r.frame_paths)} written")
     return "\n".join(lines)
 
 

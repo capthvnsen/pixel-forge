@@ -46,6 +46,7 @@ EXPECTED_TOOL_NAMES = {
     "build_asset_family",
     "import_region",
     "extract_palette",
+    "import_sheet",
     "render_view",
     "render_annotated_contact",
     "get_validation_report",
@@ -358,6 +359,35 @@ def test_import_region_direction_raises_structured_error(tmp_path: Path) -> None
             direction="south",
         )
     assert "direction" in exc_info.value.message
+
+
+def _compass8_sheet() -> Image.Image:
+    img = Image.new("RGBA", (30, 30), (30, 30, 30, 255))
+    for row, col in [(0, 0), (0, 1), (0, 2), (1, 0), (1, 2), (2, 0), (2, 1), (2, 2)]:
+        for y in range(row * 10 + 6, row * 10 + 10):
+            for x in range(col * 10 + 3, col * 10 + 7):
+                img.putpixel((x, y), (255, 0, 0, 255))
+    return img
+
+
+def test_import_sheet_writes_a_pinned_asset_that_builds_cleanly(tmp_path: Path) -> None:
+    root = _init(tmp_path)
+    _compass8_sheet().save(root / "sheet.png")
+
+    result = server.import_sheet(
+        asset_id="trooper",
+        sheet_path="sheet.png",
+        grid=(3, 3),
+        layout="compass8",
+        canvas=20,
+        baseline=15,
+    )
+    assert isinstance(result, api.SheetImportResult)
+    assert len(result.directions) == 8
+    assert not result.dry_run
+
+    manifest = server.build_asset_family()
+    assert not manifest.blocking, manifest.failed
 
 
 # --- seams / references / style profile --------------------------------------------------------

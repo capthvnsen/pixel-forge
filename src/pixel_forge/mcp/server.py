@@ -38,9 +38,11 @@ from pixel_forge.api import (
     PreviewResult,
     RenderResult,
     SeamReport,
+    SheetImportResult,
     ViewResult,
 )
 from pixel_forge.errors import ForgeError
+from pixel_forge.rendering.sheet_import import Layout
 from pixel_forge.schemas import (
     AssetDocUnion,
     AssetType,
@@ -326,6 +328,71 @@ def extract_palette(png_path: str, max_colors: int = 24) -> Palette:
     whose palette isn't known ahead of time.
     """
     return _guard(lambda: api.extract_palette_from_png(_root(), png_path, max_colors=max_colors))
+
+
+@mcp_server.tool()
+def import_sheet(
+    asset_id: str,
+    sheet_path: str,
+    grid: tuple[int, int] | None = None,
+    cell: tuple[int, int] | None = None,
+    layout: Layout | None = None,
+    directions: list[str] | None = None,
+    scale: int = 1,
+    canvas: int = 48,
+    baseline: int = 44,
+    background: str = "auto",
+    animation: str = "idle",
+    frame_duration_ms: int = 200,
+    frames_per_cell: int = 1,
+    palette_limit: int = 24,
+    replace: bool = False,
+    dry_run: bool = False,
+) -> SheetImportResult:
+    """Slice a hand-authored directional grid sheet -- a diffusion model's or artist's
+    single-image compass layout (8 directions around an empty centre cell, or 4
+    cardinal directions) -- into a new `source:`-backed character asset: one pinned
+    frame PNG per direction, cropped to its opaque bounding box and baseline-aligned.
+
+    Give exactly one of `grid` (columns, rows; cell size derived by integer division)
+    or `cell` (explicit cell width, height), and exactly one of `layout`
+    ("compass8" -- top row is camera-facing/south, bottom row is backs/north, verified
+    against real diffusion-model sheets; "compass8-flipped" for the inverse vertical
+    convention; "compass4" for a 2x2 or 1x4 cardinal-direction sheet) or `directions`
+    (an explicit name list consumed row-major over the sheet's non-empty cells).
+
+    `scale` downscales an upscaled sheet after verifying every scale x scale block is a
+    single uniform colour (raises otherwise, naming the first bad block).
+    `background` is "auto" (the sheet's single most frequent colour), "transparent"
+    (the sheet already carries alpha), or a literal "#rrggbb". `frames_per_cell > 1`
+    splits each cell into an equal-width horizontal strip of animation frames,
+    baseline-aligned together so the sprite does not jitter between them.
+
+    Refuses to overwrite an existing asset id unless `replace=True`. `dry_run=True`
+    computes and returns the result without writing anything. `sheet_path` is resolved
+    against the server's fixed project root and must stay inside it.
+    """
+    return _guard(
+        lambda: api.import_sheet(
+            _root(),
+            asset_id,
+            sheet_path,
+            grid=grid,
+            cell=cell,
+            layout=layout,
+            directions=directions,
+            scale=scale,
+            canvas=canvas,
+            baseline=baseline,
+            background=background,
+            animation=animation,
+            frame_duration_ms=frame_duration_ms,
+            frames_per_cell=frames_per_cell,
+            palette_limit=palette_limit,
+            replace=replace,
+            dry_run=dry_run,
+        )
+    )
 
 
 @mcp_server.tool()

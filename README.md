@@ -127,6 +127,29 @@ uv run pixel-forge revise engineer \
 Every edit is recorded with a revision id, before and after hashes, and an inverse, so
 it can be reversed and diffed. The full operation catalogue is in `docs/revisions.md`.
 
+## Bringing in art from elsewhere
+
+The renderer draws from a shape DSL, and a shape DSL cannot produce what a diffusion
+model or a pixel artist can. Three on-ramps exist so it does not have to:
+
+```bash
+# a whole grid sheet (8-direction compass, 3x upscaled) in one command
+uv run pixel-forge import-sheet trooper --from 8dir_3x.png \
+    --grid 3x3 --layout compass8 --scale 3 --canvas 48 --baseline 44
+
+# one region of one asset, from a PNG
+uv run pixel-forge import-region warden torso --from art/torso.png --extend-palette
+
+# or point an asset at frame files directly and pin them
+uv run pixel-forge source pin trooper
+```
+
+`import-sheet` verifies the sheet is an exact integer upscale before downscaling,
+detects the background, slices the grid, aligns every sprite's lowest opaque row on the
+declared baseline so directions do not bob, extracts the palette, writes the spec, and
+pins every frame. What comes out the other side gets the whole pipeline: validation,
+sheet packing, previews, per-direction pivots, the Godot manifest and the revision log.
+
 ## Requirements
 
 - Python 3.12+

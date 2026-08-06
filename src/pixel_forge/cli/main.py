@@ -76,6 +76,7 @@ app.command("build")(commands.guarded(commands.build_cmd))
 app.command("build-all")(commands.guarded(commands.build_all_cmd))
 app.command("import-region")(commands.guarded(commands.import_region_cmd))
 app.command("extract-palette")(commands.guarded(commands.extract_palette_cmd))
+app.command("import-sheet")(commands.guarded(commands.import_sheet_cmd))
 app.command("view")(commands.guarded(commands.view_cmd))
 app.command("contact")(commands.guarded(commands.contact_cmd))
 

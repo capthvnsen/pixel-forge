@@ -64,6 +64,7 @@ from pixel_forge.rendering import (
 )
 from pixel_forge.rendering.annotate import annotate_frame, build_annotated_contact, upscale_view
 from pixel_forge.rendering.ingest import extract_palette, load_image, png_to_bitmap
+from pixel_forge.rendering.sheet_import import Layout, SheetImportOptions, slice_sheet
 from pixel_forge.revisions import (
     affected_targets,
     apply_operation,
@@ -235,6 +236,20 @@ class ViewResult(BaseModel):
     width: int
     height: int
     scale: int
+
+
+class SheetImportResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    asset_id: str
+    directions: list[str]
+    cells_total: int
+    cells_skipped: int
+    canvas: int
+    baseline: int
+    palette_size: int
+    frame_paths: list[str]
+    dry_run: bool
 
 
 # --- internal helpers -----------------------------------------------------------------------
@@ -1017,6 +1032,128 @@ def extract_palette_from_png(root: Path, png_path: str | Path, *, max_colors: in
     project = _project(root)
     image = load_image(safe_join(project.root, str(png_path)))
     return extract_palette(image, max_colors=max_colors)
+
+
+def import_sheet(
+    root: Path,
+    asset_id: str,
+    sheet_path: str | Path,
+    *,
+    grid: tuple[int, int] | None = None,
+    cell: tuple[int, int] | None = None,
+    layout: Layout | None = None,
+    directions: Sequence[str] | None = None,
+    scale: int = 1,
+    canvas: int = 48,
+    baseline: int = 44,
+    background: str = "auto",
+    animation: str = "idle",
+    frame_duration_ms: int = 200,
+    frames_per_cell: int = 1,
+    palette_limit: int = 24,
+    replace: bool = False,
+    dry_run: bool = False,
+) -> SheetImportResult:
+    """Slice a hand-authored directional grid sheet (a diffusion model's or artist's
+    single-image compass layout) into a new `source:`-backed character asset: one
+    frame PNG per direction under `assets/<asset_id>/frames/`, cropped and
+    baseline-aligned by `pixel_forge.rendering.sheet_import.slice_sheet`, pinned the
+    same way `pin_asset_source` pins hand-supplied art.
+
+    Refuses to overwrite an existing asset id unless `replace=True`. `dry_run=True`
+    computes and returns the same result without writing anything. `sheet_path` is
+    resolved against the project root and must stay inside it.
+    """
+    project = _project(root)
+    validate_asset_id(asset_id)
+    if not replace and asset_id in project.discover_assets():
+        raise ForgeError(
+            f"asset {asset_id!r} already exists in project at {project.root}; pass "
+            "replace=True to overwrite it"
+        )
+
+    image = load_image(safe_join(project.root, str(sheet_path)))
+    options = SheetImportOptions(
+        grid=grid,
+        cell=cell,
+        layout=layout,
+        directions=tuple(directions) if directions is not None else None,
+        scale=scale,
+        canvas=canvas,
+        baseline=baseline,
+        background=background,
+        frames_per_cell=frames_per_cell,
+        palette_limit=palette_limit,
+    )
+    report = slice_sheet(image, options)
+
+    asset_dir = project.paths.asset_dir(asset_id)
+    frames_dir_name = "frames"
+    frame_names = [(f, f"{animation}_{f.direction}_{f.index}.png") for f in report.frames]
+    frame_paths = sorted(
+        _rel(project.root, asset_dir / frames_dir_name / name) for _f, name in frame_names
+    )
+
+    if dry_run:
+        return SheetImportResult(
+            asset_id=asset_id,
+            directions=list(report.directions),
+            cells_total=report.cells_total,
+            cells_skipped=report.cells_skipped,
+            canvas=canvas,
+            baseline=baseline,
+            palette_size=len(report.palette.colors),
+            frame_paths=frame_paths,
+            dry_run=True,
+        )
+
+    spec: dict[str, Any] = {
+        "schema_version": 1,
+        "asset": {
+            "id": asset_id,
+            "type": "character",
+            "canvas": [canvas, canvas],
+            "baseline_y": baseline,
+        },
+        "palette": report.palette.model_dump(mode="json"),
+        "directions": list(report.directions),
+        "anchors": {"feet": [canvas // 2, baseline]},
+        "regions": {},
+        "source": {
+            "frames_dir": frames_dir_name,
+            "pattern": "{animation}_{direction}_{index}.png",
+            "pins": {},
+        },
+        "animations": {
+            animation: {
+                "loop": True,
+                "frames": [{"duration_ms": frame_duration_ms} for _ in range(frames_per_cell)],
+            }
+        },
+        "export": {},
+        "validation": {"palette_limit": palette_limit},
+    }
+
+    frames_dir = asset_dir / frames_dir_name
+    frames_dir.mkdir(parents=True, exist_ok=True)
+    for frame, name in frame_names:
+        frame.canvas.save_png(frames_dir / name)
+
+    unpinned_doc = _require_sprite_doc(parse_asset_doc(spec), "import_sheet")
+    spec["source"]["pins"] = compute_source_pins(unpinned_doc, asset_dir)
+    project.save_asset(parse_asset_doc(spec))
+
+    return SheetImportResult(
+        asset_id=asset_id,
+        directions=list(report.directions),
+        cells_total=report.cells_total,
+        cells_skipped=report.cells_skipped,
+        canvas=canvas,
+        baseline=baseline,
+        palette_size=len(report.palette.colors),
+        frame_paths=frame_paths,
+        dry_run=False,
+    )
 
 
 def render_view(
