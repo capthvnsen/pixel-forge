@@ -410,11 +410,14 @@ def test_ramp_diagonal_shades_far_limb_one_step_darker() -> None:
             for x in range(c.width):
                 if (x < w / 2) == (side == "left"):
                     rgba = tuple(c.array[y, x])
-                    if rgba in (mid, lo):
+                    if rgba in (mid, lo, palette.rgba("pants_hi")):
                         out.add(rgba)
         return out
 
-    # far side (dark) / near side (mid), per direction.
+    # far side (dark) / near side (light), per direction. Round-6 rubric: the
+    # depth cue spans the whole ramp — far leg two steps darker (lo), near leg
+    # one step lighter (hi), so the profile's near/far separation is
+    # unambiguous at game scale.
     expected = {
         "south_east": ("left", "right"),
         "south_west": ("right", "left"),
@@ -424,7 +427,7 @@ def test_ramp_diagonal_shades_far_limb_one_step_darker() -> None:
     for direction, (far_side, near_side) in expected.items():
         assert lo in side_colours(direction, far_side), direction
         assert mid not in side_colours(direction, far_side), direction
-        assert mid in side_colours(direction, near_side), direction
+        assert palette.rgba("pants_hi") in side_colours(direction, near_side), direction
         assert lo not in side_colours(direction, near_side), direction
 
     # Front keeps the authored tone on both legs.
@@ -470,24 +473,26 @@ def test_ramp_diagonals_reorient_torso_light_to_near_side() -> None:
     sw_hi, sw_lo = torso_sides("south_west")
     assert sw_hi and sw_lo
     assert min(sw_hi) < w / 2 < max(sw_lo), (sw_hi, sw_lo)
-    # The far/near leg shading is untouched (the flip excludes limbs).
-    mid, plo = palette.rgba("pants_mid"), palette.rgba("pants_lo")
+    # The far/near leg shading is untouched by the flip (limbs excluded) and
+    # spans the ramp: far leg = lo (2 steps), near leg = hi (1 step lighter).
+    plo = palette.rgba("pants_lo")
+    phi = palette.rgba("pants_hi")
 
     def leg_sides(direction: str) -> tuple[list[int], list[int]]:
         c = views[direction].composite(doc.asset.canvas)
-        mid_x, lo_x = [], []
+        light_x, lo_x = [], []
         for y in range(c.height):
             for x in range(c.width):
                 rgba = tuple(c.array[y, x])
-                if rgba == mid:
-                    mid_x.append(x)
+                if rgba == phi:
+                    light_x.append(x)
                 elif rgba == plo:
                     lo_x.append(x)
-        return mid_x, lo_x
+        return light_x, lo_x
 
-    se_mid, se_plo = leg_sides("south_east")
-    assert se_mid and se_plo
-    assert max(se_plo) < w / 2 < min(se_mid)  # far leg (left) dark, near leg (right) mid
+    se_light, se_plo = leg_sides("south_east")
+    assert se_light and se_plo
+    assert max(se_plo) < w / 2 < min(se_light)  # far leg (left) dark, near leg (right) light
 
 
 def test_ramp_side_views_stay_exact_mirrors() -> None:
