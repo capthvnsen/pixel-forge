@@ -3,23 +3,23 @@ east, north) -> 3-frame walk -> sheet packed in the samples' row order
 (down/left/right/up), 20x32 cells, x4 for review. This is 'ours' for the
 gauntlet A/B against the Jephed sample pack references.
 """
+
 from __future__ import annotations
 
 import sys
 import tempfile
 from pathlib import Path
 
-from PIL import Image  # noqa: E402
+from PIL import Image
 
 sys.path.insert(0, "/Users/alex/orca/projects/Pixelartllm-buddy/.progress/pieces/samples4")
-from make_chibi import draw_layers, CANVAS  # noqa: E402
+from make_chibi import draw_layers
 
 from pixel_forge import api
 from pixel_forge.animation.cycles import generate_joint_walk_cycle
 from pixel_forge.domain.palette import resolve_palette
 from pixel_forge.rendering.canvas import Canvas
 from pixel_forge.rendering.direction import project_animated_frames, project_directions
-from pixel_forge.schemas.animation import FrameSpec
 
 OUT = Path("/Users/alex/orca/projects/Pixelartllm-buddy/.progress/pieces/samples4")
 # samples' row order: down, left, right, up
@@ -36,7 +36,14 @@ def build_doc():
         p.parent.mkdir(parents=True, exist_ok=True)
         img.save(p)
         front[role] = p
-    result = api.import_layered(root, "chibi", front, timestamp="2026-08-07T00:00:00Z")
+    result = api.import_layered(
+        root,
+        "chibi",
+        front,
+        timestamp="2026-08-07T00:00:00Z",
+        max_colors=32,
+        canvas=(20, 32),  # the samples' cell size: margins give the arm clamp room
+    )
     doc = api.get_asset(root, "chibi")
     palette = resolve_palette(doc.palette)
     return root, doc, palette, result

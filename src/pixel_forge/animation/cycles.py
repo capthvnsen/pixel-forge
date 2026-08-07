@@ -71,6 +71,7 @@ class WalkRoles:
 
     body: str | None
     head: str | None
+    hair: str | None
     leg_left: str | None
     leg_right: str | None
     arm_left: str | None
@@ -92,6 +93,7 @@ def _side(name: str) -> str | None:
 def _discover_roles(doc: SpriteAssetBase) -> WalkRoles:
     body: str | None = None
     head: str | None = None
+    hair: str | None = None
     leg_left: str | None = None
     leg_right: str | None = None
     arm_left: str | None = None
@@ -113,6 +115,8 @@ def _discover_roles(doc: SpriteAssetBase) -> WalkRoles:
             body = name
         elif head is None and "head" in lower:
             head = name
+        elif hair is None and "hair" in lower:
+            hair = name
 
     for name in doc.regions:
         if name in static:
@@ -133,6 +137,7 @@ def _discover_roles(doc: SpriteAssetBase) -> WalkRoles:
     return WalkRoles(
         body=body,
         head=head,
+        hair=hair,
         leg_left=leg_left,
         leg_right=leg_right,
         arm_left=arm_left,
@@ -907,6 +912,11 @@ def generate_joint_walk_cycle(
             transforms[roles.body] = RegionTransform(offset=(0, bob_y))
         if roles.head is not None:
             transforms[roles.head] = RegionTransform(offset=(0, bob_y))
+        if roles.hair is not None:
+            # The hair rides the same bob as the head: a hair region covering
+            # the head's top would otherwise freeze the visible silhouette
+            # while the face plane slides underneath (reads as a pogo stick).
+            transforms[roles.hair] = RegionTransform(offset=(0, bob_y))
 
         frames.append(FrameSpec(duration_ms=duration_ms, events=[], transforms=transforms))
     return frames
