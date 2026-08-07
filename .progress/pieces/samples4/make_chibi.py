@@ -33,10 +33,17 @@ SHIRT_LO = (132, 28, 48, 255)  # cool maroon shadow (hue shift, sample style)
 SHIRT_EDGE = (84, 16, 30, 255)  # dark maroon selout
 GOLD = (232, 186, 96, 255)  # jacket buttons
 GOLD_EDGE = (150, 108, 44, 255)
-PANTS_HI = (150, 158, 172, 255)  # light warm-grey (near leg pops)
-PANTS_MID = (120, 128, 142, 255)
-PANTS_LO = (66, 70, 84, 255)  # darker shadow (far leg depth cue)
-PANTS_EDGE = (32, 34, 42, 255)
+# Pants: warm brown-grey (the samples' trousers) — NOT desaturated grey-blue.
+# The ramp inference clusters by hue; near-grey colors have noisy hue
+# estimates (PANTS_MID measured 218° vs LO 227° with sat ~0.1), which SPLITS
+# the family and silently disables the far-limb depth cue on the legs (round-6
+# forensics: the far leg's fill stayed MID because no pants ramp existed).
+# Saturated warm tones give stable hues, so the 3-step family infers and the
+# near/far darkening fires.
+PANTS_HI = (178, 146, 130, 255)  # light warm tan (near leg pops)
+PANTS_MID = (140, 108, 92, 255)
+PANTS_LO = (92, 64, 52, 255)  # deep warm shadow (far leg)
+PANTS_EDGE = (48, 32, 26, 255)
 SHOE = (58, 52, 62, 255)
 SHOE_HI = (92, 84, 98, 255)
 SHOE_EDGE = (22, 20, 26, 255)
@@ -179,7 +186,8 @@ def _draw_body(layers: dict[str, Image.Image]) -> None:
     for side, x in (("leg_left", 4), ("leg_right", 13)):
         leg = layers[side]
         _rect(leg, x + 1, 21, x + 2, 25, PANTS_MID)  # 2px fill (5px pants — chibi short legs)
-        _px(leg, x + 1, 21, PANTS_HI)  # thigh light
+        _rect(leg, x + 1, 21, x + 2, 21, PANTS_HI)  # thigh light — 2px wide so the tone
+        _px(leg, x + 1, 25, PANTS_HI)  # survives the import's palette dedup
         _rect(leg, x + 1, 26, x + 2, 26, PANTS_LO)  # knee shadow
         _rect(leg, x + 1, 27, x + 2, 30, SHOE)  # shoe (4px tall — grounded)
         _px(leg, x + 1, 27, SHOE_HI)
