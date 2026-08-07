@@ -435,6 +435,33 @@ hand-crafted per-direction art.
 3. Keep looping on art craft — diminishing returns; the scoreplateaued at
    5-6/10 for three rounds despite real improvements
 
+## Gauntlet Meta-Improvements (2026-08-07, committed 45c039d)
+
+**What changed (the judge, not the art):**
+- `blind_harness.py` (/tmp/pf_tools): presentation-controlled seeded blind
+  montages — both sheets re-composited into IDENTICAL cell layouts (same
+  background, gaps, margins, no borders), random side per seed.
+- `pack_sweep.py`: ranked all 40 pack sheets by complexity (unique colors +
+  silhouette). Fairest target = 028 (18 colors, bald, striped shirt); the
+  earlier rounds tested vs 001 (34 colors, mid-tier) and 000 (40, complex).
+- Fixed 6-axis rubric per read + 3-seed majority protocol.
+
+**Formal verdict (ours vs 028, the simplest sample): 3/3 reads to the
+reference, average 7.8 vs 4.8 — STABLE across seeds** (the read-to-read
+noise of earlier rounds is gone; the same read repeated identically 3x).
+Axis scores: readability 8 vs 6 (our one win), depth sep 8 vs 4, walk 7 vs 4,
+shading 8 vs 5, outlines 8 vs 5, proportions 8 vs 5.
+
+**Engine change from the rubric:** _RampMap gains `lighter`; the limb depth
+cue spans the whole ramp (far limb 2 steps darker -> lo, near limb 1 step
+lighter -> hi). Depth-separation axis moved 3 -> 4/10. Mirrors byte-exact,
+1069 green.
+
+**Meta conclusion:** the formalized judge confirms the ceiling with high
+confidence — the gap is ~3 rubric points concentrated in depth/walk/shading/
+outlines/proportions, all hand-craft dimensions. The single-input projection
+engine cannot close them; authored side views can.
+
 ## Plan (from HANDOFF.md priority order)
 
 | # | Piece | Builder owns (files) | Status | Critic verdict |
