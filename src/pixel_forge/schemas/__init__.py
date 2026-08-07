@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pixel_forge.schemas.animation import (
     AnimationSpec,
+    EasingName,
     FrameSpec,
     ProceduralAnimationSpec,
 )
@@ -31,10 +32,14 @@ from pixel_forge.schemas.asset import (
 from pixel_forge.schemas.common import (
     RGBA,
     Anchor,
+    ArcShape,
+    BezierShape,
     BitmapShape,
+    CurveShape,
     EllipseShape,
     LineShape,
     PixelShape,
+    PolygonShape,
     RectShape,
     Region,
     RegionTransform,
@@ -45,6 +50,7 @@ from pixel_forge.schemas.common import (
 from pixel_forge.schemas.export_schemas import export_json_schemas
 from pixel_forge.schemas.manifest import (
     AnimationKeyframe,
+    AnimationPlayerAnimation,
     AnimationPlayerExport,
     AnimationPlayerTrack,
     AssetManifest,
@@ -72,17 +78,27 @@ from pixel_forge.schemas.revision import (
     RevisionRecord,
 )
 from pixel_forge.schemas.source import ExternalSource, pin_key
-from pixel_forge.schemas.style import ProvenanceEntry, StyleProfile
-from pixel_forge.schemas.validation import Finding, Severity, ValidationReport
+from pixel_forge.schemas.style import ArtDirection, ProvenanceEntry, StyleProfile
+from pixel_forge.schemas.validation import (
+    Finding,
+    QualityIssue,
+    QualityReport,
+    Severity,
+    ValidationReport,
+    Verdict,
+)
 
 __all__ = [
     "RGBA",
     "Anchor",
     "AnimatedTileSpec",
     "AnimationKeyframe",
+    "AnimationPlayerAnimation",
     "AnimationPlayerExport",
     "AnimationPlayerTrack",
     "AnimationSpec",
+    "ArcShape",
+    "ArtDirection",
     "AssetDoc",
     "AssetDocUnion",
     "AssetHeader",
@@ -90,8 +106,11 @@ __all__ = [
     "AssetType",
     "AtlasRect",
     "BaseAssetDoc",
+    "BezierShape",
     "BitmapShape",
     "CharacterAsset",
+    "CurveShape",
+    "EasingName",
     "EllipseShape",
     "EnemyAsset",
     "EnemyCombat",
@@ -114,10 +133,13 @@ __all__ = [
     "PaletteColor",
     "PaletteRef",
     "PixelShape",
+    "PolygonShape",
     "ProceduralAnimationSpec",
     "ProjectConfig",
     "PropAsset",
     "ProvenanceEntry",
+    "QualityIssue",
+    "QualityReport",
     "RectShape",
     "Region",
     "RegionTransform",
@@ -141,6 +163,7 @@ __all__ = [
     "ValidationReport",
     "ValidationSummary",
     "Vec2",
+    "Verdict",
     "export_json_schemas",
     "parse_asset_doc",
     "pin_key",

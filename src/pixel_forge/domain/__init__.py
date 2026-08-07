@@ -24,6 +24,7 @@ from pixel_forge.domain.palette import (
     ResolvedPalette,
     check_palette_limit,
     hex_to_rgba,
+    palette_for_polish,
     resolve_palette,
     rgba_to_hex,
 )
@@ -49,6 +50,7 @@ __all__ = [
     "load_yaml",
     "mirror_anchors",
     "mirror_point_x",
+    "palette_for_polish",
     "resolve_palette",
     "rgba_to_hex",
     "safe_join",

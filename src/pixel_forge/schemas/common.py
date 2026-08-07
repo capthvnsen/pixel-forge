@@ -44,6 +44,96 @@ class EllipseShape(ShapeBase):
     fill: bool = True
 
 
+class PolygonShape(ShapeBase):
+    """A closed polygon through `points` (at least 3 vertices, listed in order).
+
+    `fill=True` rasterises the interior with the even-odd rule (so a self-intersecting
+    outline or a nested hole drawn as one point list produces holes) and then post-fills the
+    closed Bresenham boundary, so every vertex and edge pixel is present and mirrored
+    polygons render identical silhouettes; `fill=False` draws just that boundary (each edge
+    is a Bresenham line, closing back to the first point).
+    """
+
+    op: Literal["polygon"]
+    points: list[Vec2]
+    fill: bool = True
+
+    @model_validator(mode="after")
+    def _check_points(self) -> PolygonShape:
+        if len(self.points) < 3:
+            raise ValueError("polygon needs at least 3 points")
+        return self
+
+
+class ArcShape(ShapeBase):
+    """A circular arc centred at `at` with integer `radius` (px).
+
+    Angles are in degrees, standard math convention: 0 is the +x axis and positive angles
+    rotate clockwise in screen coordinates (y down), so 90 is straight down and 270 straight
+    up. `start_deg == end_deg` (e.g. the default 0..360) is a full circle. `fill=False` draws
+    an annulus band `thickness` px wide centred on the circle; `fill=True` draws a filled
+    pie slice from the centre out to `radius`.
+    """
+
+    op: Literal["arc"]
+    at: Vec2
+    radius: int
+    start_deg: float = 0
+    end_deg: float = 360
+    thickness: int = 1
+    fill: bool = False
+
+    @model_validator(mode="after")
+    def _check_geometry(self) -> ArcShape:
+        if self.radius < 0:
+            raise ValueError("arc radius must be >= 0")
+        if self.thickness < 1:
+            raise ValueError("arc thickness must be >= 1")
+        return self
+
+
+class CurveShape(ShapeBase):
+    """A polyline through `points` (at least 2), drawn as chained line segments.
+
+    `thickness` (px, default 1) renders every segment as a Euclidean distance band of
+    half-width `thickness / 2` centred on the line (uniform width on every slope);
+    thickness 1 is a 1 px Bresenham line, and a degenerate single-point curve renders as a
+    centred dot.
+    """
+
+    op: Literal["curve"]
+    points: list[Vec2]
+    thickness: int = 1
+
+    @model_validator(mode="after")
+    def _check_points(self) -> CurveShape:
+        if len(self.points) < 2:
+            raise ValueError("curve needs at least 2 points")
+        if self.thickness < 1:
+            raise ValueError("curve thickness must be >= 1")
+        return self
+
+
+class BezierShape(ShapeBase):
+    """A quadratic Bezier curve from `p0`, guided by `p1`, to `p2`.
+
+    Sampled deterministically at a fixed integer count derived from the control-polygon
+    length, then drawn as a polyline; `thickness` behaves as in `CurveShape`.
+    """
+
+    op: Literal["bezier"]
+    p0: Vec2
+    p1: Vec2
+    p2: Vec2
+    thickness: int = 1
+
+    @model_validator(mode="after")
+    def _check_thickness(self) -> BezierShape:
+        if self.thickness < 1:
+            raise ValueError("bezier thickness must be >= 1")
+        return self
+
+
 _TRANSPARENT = (".", " ")
 
 
@@ -104,7 +194,15 @@ class BitmapShape(BaseModel):
 
 
 Shape = Annotated[
-    PixelShape | LineShape | RectShape | EllipseShape | BitmapShape,
+    PixelShape
+    | LineShape
+    | RectShape
+    | EllipseShape
+    | PolygonShape
+    | ArcShape
+    | CurveShape
+    | BezierShape
+    | BitmapShape,
     Field(discriminator="op"),
 ]
 

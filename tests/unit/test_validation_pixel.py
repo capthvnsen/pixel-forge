@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from pixel_forge.animation.resolver import resolve_frames
-from pixel_forge.domain.palette import resolve_palette
+from pixel_forge.domain.palette import expand_palette, resolve_palette
 from pixel_forge.rendering.canvas import RGBA, Canvas
 from pixel_forge.schemas import CharacterAsset, parse_asset_doc
 from pixel_forge.validation import engine as engine_module
@@ -71,13 +71,20 @@ def _canvas(w: int, h: int, pixels: dict[tuple[int, int], RGBA] | None = None) -
     return c
 
 
-def _ctx(doc: CharacterAsset, frames: dict[tuple[str, str, int], Canvas]) -> RuleContext:
+def _ctx(
+    doc: CharacterAsset,
+    frames: dict[tuple[str, str, int], Canvas],
+    *,
+    polish_shadow_rows: int = 0,
+    palette_override: Any | None = None,
+) -> RuleContext:
     return RuleContext(
         doc=doc,
-        palette=resolve_palette(doc.palette),
+        palette=palette_override if palette_override is not None else resolve_palette(doc.palette),
         frames=frames,
         resolved=resolve_frames(doc),
         tiles={},
+        polish_shadow_rows=polish_shadow_rows,
     )
 
 
@@ -203,6 +210,28 @@ def test_pix005_does_not_fire_when_within_limit() -> None:
     assert report.findings == []
 
 
+def test_pix005_counts_declared_colours_not_expanded_ramp_tones() -> None:
+    # api.py's validation path hands PIX rules the palette_for_polish-expanded
+    # palette; the render-time derived ramp/outline tones must not count against
+    # the authored palette's limit.
+    doc = _doc(validation={"palette_limit": 2})
+    expanded = resolve_palette(
+        expand_palette(
+            doc.palette.model_copy(update={"auto_ramp": True, "derive_outline": True})
+        )
+    )
+    assert expanded.size > 2  # red/black each expanded to 3 tones + outline
+    ctx = RuleContext(
+        doc=doc,
+        palette=expanded,
+        frames={},
+        resolved=resolve_frames(doc),
+        tiles={},
+    )
+    report = run_validation(ctx, only=["PIX005"])
+    assert report.findings == []
+
+
 # ---- PIX006: orphan pixels (heuristic) -------------------------------------------
 
 
@@ -261,6 +290,55 @@ def test_pix007_does_not_fire_when_second_colour_is_common() -> None:
     for x, y in perimeter[: len(perimeter) // 2]:
         canvas.set_pixel(x, y, WHITE)  # 50% of the edge -> not "small"
     ctx = _ctx(doc, {("idle", "south", 0): canvas})
+    report = run_validation(ctx, only=["PIX007"])
+    assert report.findings == []
+
+
+def test_pix007_fires_on_uninked_ground_shadow_band_without_polish_metadata() -> None:
+    # A polished frame's contact-shadow band (rows appended below the sprite,
+    # shadow-darkened, never inked) sits on the silhouette edge. Without the
+    # RuleContext.polish_shadow_rows band info, those pixels read as a small
+    # off-colour "outline" patch and the heuristic fires.
+    doc = _doc(
+        canvas=(10, 10),
+        palette_colors=[
+            {"id": "red", "hex": "#ff0000"},
+            {"id": "black", "hex": "#000000"},
+        ],
+    )
+    canvas = Canvas(10, 10)
+    canvas.draw_rect((1, 1), (8, 8), RED, fill=True)
+    # A narrow ground-shadow patch below the sprite's bottom edge: 2 of the 28
+    # edge pixels (~7%) in a shadow-darkened colour the outline never inks.
+    canvas.set_pixel(4, 9, (40, 40, 40, 255))
+    canvas.set_pixel(5, 9, (40, 40, 40, 255))
+    ctx = _ctx(doc, {("idle", "south", 0): canvas})
+    report = run_validation(ctx, only=["PIX007"])
+    assert len(report.findings) == 1
+    assert report.findings[0].rule_id == "PIX007"
+    assert report.findings[0].severity == "warning"
+
+
+def test_pix007_stays_silent_when_ground_shadow_band_is_excluded() -> None:
+    # Same frame, but with polish_shadow_rows=1 the shadow band is excluded
+    # from the edge-coverage analysis: the silhouette edge is the sprite's own
+    # inked ring (all RED here), so no off-colour patch is flagged.
+    doc = _doc(
+        canvas=(10, 10),
+        palette_colors=[
+            {"id": "red", "hex": "#ff0000"},
+            {"id": "black", "hex": "#000000"},
+        ],
+    )
+    canvas = Canvas(10, 10)
+    canvas.draw_rect((1, 1), (8, 8), RED, fill=True)
+    canvas.set_pixel(4, 9, (40, 40, 40, 255))
+    canvas.set_pixel(5, 9, (40, 40, 40, 255))
+    ctx = _ctx(
+        doc,
+        {("idle", "south", 0): canvas},
+        polish_shadow_rows=1,
+    )
     report = run_validation(ctx, only=["PIX007"])
     assert report.findings == []
 
@@ -423,6 +501,48 @@ def test_pix012_does_not_fire_on_small_flat_area() -> None:
     assert report.findings == []
 
 
+def _rect_region(color_id: str) -> dict[str, Any]:
+    return {
+        "anchor": "root",
+        "layer": 0,
+        "shapes": [{"op": "rect", "color": color_id, "at": [0, 0], "size": [8, 8]}],
+    }
+
+
+_SKIN_LIGHT_RGBA: RGBA = (255, 204, 153, 255)  # #ffcc99
+_SKIN_DARK_RGBA: RGBA = (204, 153, 102, 255)  # #cc9966
+
+
+def test_pix012_fires_on_flat_rect_region() -> None:
+    # A large rect shape painted in a single ramp colour has no bitmap keys, so
+    # only the rendered-frame path (pixels on the composited canvas) can see it.
+    doc = _doc(palette_colors=_SKIN_RAMP, regions={"body": _rect_region("skin_light")})
+    canvas = _canvas(8, 8, {(x, y): _SKIN_LIGHT_RGBA for x in range(8) for y in range(8)})
+    ctx = _ctx(doc, {("idle", "south", 0): canvas})
+    report = run_validation(ctx, only=["PIX012"])
+    assert len(report.findings) == 1
+    finding = report.findings[0]
+    assert finding.rule_id == "PIX012"
+    assert finding.measurements["ramp"] == "skin"
+    assert finding.measurements["area_px"] == 64
+    assert finding.animation == "idle"
+    assert finding.direction == "south"
+    assert finding.frame == 0
+
+
+def test_pix012_does_not_fire_on_two_tone_region() -> None:
+    # The same 64px surface split between two ramp colours is properly shaded
+    # and must stay silent even though each half is one flat colour.
+    doc = _doc(palette_colors=_SKIN_RAMP, regions={"body": _rect_region("skin_light")})
+    canvas = _canvas(8, 8)
+    for x in range(8):
+        for y in range(8):
+            canvas.set_pixel(x, y, _SKIN_DARK_RGBA if x < 4 else _SKIN_LIGHT_RGBA)
+    ctx = _ctx(doc, {("idle", "south", 0): canvas})
+    report = run_validation(ctx, only=["PIX012"])
+    assert report.findings == []
+
+
 # ---- engine mechanics --------------------------------------------------------------
 
 
@@ -515,3 +635,315 @@ def test_blocking_true_iff_error_present() -> None:
     warning_ctx = _ctx(doc, {("idle", "south", 0): _canvas(8, 8, {(4, 4): RED})})  # PIX006 warning
     warning_report = run_validation(warning_ctx, only=["PIX006"])
     assert warning_report.blocking is False
+
+
+# ---- PIX016: same-colour orphan pixel ---------------------------------------
+
+
+def test_pix016_fires_on_same_colour_orphan() -> None:
+    doc = _doc()
+    ctx = _ctx(doc, {("idle", "south", 0): _canvas(8, 8, {(3, 3): RED})})
+    report = run_validation(ctx, only=["PIX016"])
+    assert len(report.findings) == 1
+    finding = report.findings[0]
+    assert finding.rule_id == "PIX016"
+    assert finding.severity == "warning"
+    assert finding.kind == "heuristic"
+    assert finding.measurements["coords"] == [[3, 3]]
+
+
+def test_pix016_does_not_fire_when_same_colour_neighbour_exists() -> None:
+    doc = _doc()
+    pixels = {(2, 2): RED, (3, 2): RED, (2, 3): RED, (3, 3): RED}  # 2x2 block
+    ctx = _ctx(doc, {("idle", "south", 0): _canvas(8, 8, pixels)})
+    report = run_validation(ctx, only=["PIX016"])
+    assert report.findings == []
+
+
+def test_pix016_orthogonal_only_diagonal_same_colour_still_fires() -> None:
+    # Diagonal same-colour neighbours do not count (orthogonal only), so a
+    # diagonal line of one colour reads as two separate orphans.
+    doc = _doc()
+    ctx = _ctx(doc, {("idle", "south", 0): _canvas(8, 8, {(3, 3): RED, (4, 4): RED})})
+    report = run_validation(ctx, only=["PIX016"])
+    assert len(report.findings) == 1
+    assert report.findings[0].measurements["orphan_count"] == 2
+
+
+# ---- PIX017: noisy cluster ---------------------------------------------------
+
+
+def test_pix017_fires_on_isolated_2px_cluster() -> None:
+    doc = _doc()
+    ctx = _ctx(doc, {("idle", "south", 0): _canvas(8, 8, {(2, 2): RED, (3, 2): RED})})
+    report = run_validation(ctx, only=["PIX017"])
+    assert len(report.findings) == 1
+    finding = report.findings[0]
+    assert finding.rule_id == "PIX017"
+    assert finding.severity == "info"
+    assert finding.measurements["coords"] == [[2, 2], [3, 2]]
+
+
+def test_pix017_fires_on_isolated_3px_L_cluster() -> None:
+    doc = _doc()
+    pixels = {(2, 2): RED, (3, 2): RED, (3, 3): RED}
+    ctx = _ctx(doc, {("idle", "south", 0): _canvas(8, 8, pixels)})
+    report = run_validation(ctx, only=["PIX017"])
+    assert len(report.findings) == 1
+    assert report.findings[0].measurements["cluster_count"] == 1
+
+
+def test_pix017_does_not_fire_when_bbox_has_another_colour() -> None:
+    # The L-cluster's bbox is filled by a black pixel -> not an isolated speck.
+    doc = _doc()
+    pixels = {(2, 2): RED, (3, 2): RED, (3, 3): RED, (2, 3): BLACK}
+    ctx = _ctx(doc, {("idle", "south", 0): _canvas(8, 8, pixels)})
+    report = run_validation(ctx, only=["PIX017"])
+    assert report.findings == []
+
+
+def test_pix017_does_not_fire_on_4px_block_or_single_pixel() -> None:
+    doc = _doc()
+    block = {(2, 2): RED, (3, 2): RED, (2, 3): RED, (3, 3): RED}
+    ctx = _ctx(doc, {("idle", "south", 0): _canvas(8, 8, block)})
+    assert run_validation(ctx, only=["PIX017"]).findings == []
+    single = _ctx(doc, {("idle", "south", 0): _canvas(8, 8, {(4, 4): RED})})
+    assert run_validation(single, only=["PIX017"]).findings == []
+
+
+def test_pix016_and_pix017_stay_silent_on_polished_style_dither() -> None:
+    # The render-polish pass deliberately dithers 1px orphans between shade
+    # tones and forms 2-3px clusters that touch other colours. Both calibrated
+    # heuristics must treat that as intentional art, not noise.
+    doc = _doc()  # red + black palette
+    pixels: dict[tuple[int, int], RGBA] = {}
+    # A mid-tone field (red) with a few intentional 1px BLACK dither specks,
+    # each touching red on at least one side (the polish shade-band signature).
+    for y in range(2, 6):
+        for x in range(2, 6):
+            pixels[(x, y)] = RED
+    for (x, y) in [(2, 3), (4, 3), (3, 5)]:
+        pixels[(x, y)] = BLACK  # orphan dither: BLACK has no BLACK neighbour,
+        # but its 3x3 DOES contain red -> not a defect speck under PIX016
+    ctx = _ctx(doc, {("idle", "south", 0): _canvas(8, 8, pixels)})
+    assert run_validation(ctx, only=["PIX016"]).findings == []
+    # A 2px BLACK cluster touching red (polish cluster signature) is also fine.
+    pixels2 = dict(pixels)
+    pixels2[(5, 2)] = BLACK
+    ctx2 = _ctx(doc, {("idle", "south", 0): _canvas(8, 8, pixels2)})
+    assert run_validation(ctx2, only=["PIX017"]).findings == []
+
+
+# ---- PIX018: broken outline ---------------------------------------------------
+
+
+INK: RGBA = (34, 34, 34, 255)
+
+
+def _outline_doc() -> CharacterAsset:
+    return _doc(
+        palette_colors=[
+            {"id": "red", "hex": "#ff0000"},
+            {"id": "ink", "hex": "#222222", "role": "outline"},
+        ]
+    )
+
+
+def _outlined_rect(notch: set[tuple[int, int]] | None = None) -> Canvas:
+    """6x6 rect at (0,0): ink boundary, red interior, optional ink-removed notch."""
+    c = Canvas(8, 8)
+    for x in range(6):
+        for y in range(6):
+            on_boundary = x in (0, 5) or y in (0, 5)
+            c.set_pixel(x, y, INK if on_boundary else RED)
+    for (x, y) in notch or set():
+        c.set_pixel(x, y, RED)
+    return c
+
+
+def test_pix018_fires_on_two_pixel_outline_gap() -> None:
+    doc = _outline_doc()
+    canvas = _outlined_rect(notch={(1, 0), (2, 0)})
+    ctx = _ctx(doc, {("idle", "south", 0): canvas})
+    report = run_validation(ctx, only=["PIX018"])
+    assert len(report.findings) == 1
+    finding = report.findings[0]
+    assert finding.rule_id == "PIX018"
+    assert finding.severity == "warning"
+    assert finding.measurements["gap_count"] == 1
+    assert finding.measurements["coords"] == [[1, 0], [2, 0]]
+
+
+def test_pix018_does_not_fire_on_closed_outline() -> None:
+    doc = _outline_doc()
+    ctx = _ctx(doc, {("idle", "south", 0): _outlined_rect()})
+    report = run_validation(ctx, only=["PIX018"])
+    assert report.findings == []
+
+
+def test_pix018_does_not_fire_on_single_pixel_gap() -> None:
+    doc = _outline_doc()
+    ctx = _ctx(doc, {("idle", "south", 0): _outlined_rect(notch={(1, 0)})})
+    report = run_validation(ctx, only=["PIX018"])
+    assert report.findings == []
+
+
+def test_pix018_skips_when_no_outline_colour_declared() -> None:
+    doc = _doc()  # default palette: red + black, no outline role
+    ctx = _ctx(doc, {("idle", "south", 0): _outlined_rect(notch={(1, 0), (2, 0)})})
+    report = run_validation(ctx, only=["PIX018"])
+    assert report.findings == []
+
+
+# ---- PIX019: spatial banding on 45-degree slopes ------------------------------
+
+
+def test_pix019_fires_on_undithered_six_pixel_diagonal() -> None:
+    doc = _doc()
+    # A thin 1px BLACK diagonal line cutting through a flat RED field: the run's
+    # colour differs from the field's dominant colour, so it reads as a hard
+    # tone step — genuine banding. (A same-colour run in a same-colour field —
+    # flat fill — must NOT fire; covered by the solid-rect stays-silent case.)
+    pixels: dict[tuple[int, int], RGBA] = {(x, y): RED for y in range(16) for x in range(16)}
+    for x in range(2, 8):
+        pixels[(x, x)] = BLACK
+    ctx = _ctx(doc, {("idle", "south", 0): _canvas(16, 16, pixels)})
+    report = run_validation(ctx, only=["PIX019"])
+    assert len(report.findings) == 1
+    finding = report.findings[0]
+    assert finding.rule_id == "PIX019"
+    assert finding.severity == "info"
+    assert finding.measurements["run_count"] >= 1
+
+
+def test_pix019_fires_on_anti_diagonal_run() -> None:
+    doc = _doc()
+    # Same thin tone step along the anti-diagonal.
+    pixels: dict[tuple[int, int], RGBA] = {(x, y): RED for y in range(16) for x in range(16)}
+    for (x, y) in [(2, 12), (3, 11), (4, 10), (5, 9), (6, 8), (7, 7)]:
+        pixels[(x, y)] = BLACK
+    ctx = _ctx(doc, {("idle", "south", 0): _canvas(16, 16, pixels)})
+    report = run_validation(ctx, only=["PIX019"])
+    assert len(report.findings) == 1
+    assert report.findings[0].measurements["run_count"] >= 1
+
+
+def test_pix019_does_not_fire_on_solid_flat_fill() -> None:
+    # A solid single-colour rect: the run's colour == the field's colour, so it
+    # is flat fill, not banding. This is the critic's false-positive probe.
+    doc = _doc()
+    pixels: dict[tuple[int, int], RGBA] = {(x, y): RED for y in range(16) for x in range(16)}
+    ctx = _ctx(doc, {("idle", "south", 0): _canvas(16, 16, pixels)})
+    report = run_validation(ctx, only=["PIX019"])
+    assert report.findings == []
+
+
+def test_pix019_does_not_fire_on_short_or_axis_aligned_runs() -> None:
+    doc = _doc()
+    # A small 5x5 RED block: its own interior diagonals cap at 4px, and a 3px
+    # BLACK diagonal inside stays under the 6px threshold.
+    pixels: dict[tuple[int, int], RGBA] = {(x, y): RED for y in range(5) for x in range(5)}
+    for x in range(1, 4):
+        pixels[(x, x)] = BLACK
+    ctx = _ctx(doc, {("idle", "south", 0): _canvas(8, 8, pixels)})
+    assert run_validation(ctx, only=["PIX019"]).findings == []
+    horizontal: dict[tuple[int, int], RGBA] = {(x, y): RED for y in range(8) for x in range(8)}
+    for x in range(8):  # axis-aligned, not 45 degrees
+        horizontal[(x, 3)] = BLACK
+    ctx2 = _ctx(doc, {("idle", "south", 0): _canvas(8, 8, horizontal)})
+    assert run_validation(ctx2, only=["PIX019"]).findings == []
+
+
+def test_pix019_does_not_fire_on_silhouette_edge_diagonal() -> None:
+    # A lone diagonal IS its own silhouette — every pixel is an edge pixel, so
+    # the flat-context criterion correctly stays silent (this is the shape's
+    # 45-degree outline, not shading banding).
+    doc = _doc()
+    pixels = {(x, x): RED for x in range(8)}
+    ctx = _ctx(doc, {("idle", "south", 0): _canvas(8, 8, pixels)})
+    report = run_validation(ctx, only=["PIX019"])
+    assert report.findings == []
+
+
+def test_pix019_does_not_fire_on_dithered_diagonal() -> None:
+    # A small 5x5 block with a dithered diagonal: alternate colours break the
+    # same-colour run, and the block's own diagonals stay under 6px.
+    doc = _doc()
+    pixels: dict[tuple[int, int], RGBA] = {(x, y): RED for y in range(5) for x in range(5)}
+    for x in range(1, 5):
+        pixels[(x, x)] = BLACK if x % 2 == 0 else RED
+    ctx = _ctx(doc, {("idle", "south", 0): _canvas(8, 8, pixels)})
+    report = run_validation(ctx, only=["PIX019"])
+    assert report.findings == []
+
+
+def test_pix019_does_not_fire_on_polished_expanded_palette() -> None:
+    # The render-polish pass deliberately shades with integer run-distance tone
+    # bands, so PIX019 (an authored-art check) must stay silent when the frames
+    # were rendered through polish — signalled by the palette_for_polish
+    # expansion (auto_ramp + derive_outline). A staircase that WOULD fire on a
+    # flat palette must not fire against the expanded palette.
+    doc = _doc()  # red + black declared palette
+    pixels: dict[tuple[int, int], RGBA] = {(x, y): RED for y in range(16) for x in range(16)}
+    for x in range(2, 8):
+        pixels[(x, x)] = BLACK  # tone step: fires under the flat palette
+    from pixel_forge.domain.palette import palette_for_polish
+
+    expanded = resolve_palette(palette_for_polish(doc.palette))
+    assert len(expanded.palette.colors) > len(doc.palette.colors)  # polish signalled
+    ctx = _ctx(
+        doc,
+        {("idle", "south", 0): _canvas(16, 16, pixels)},
+        palette_override=expanded,
+    )
+    report = run_validation(ctx, only=["PIX019"])
+    assert report.findings == []
+
+
+def test_pix019_anti_diagonal_coords_are_staircase_pixels() -> None:
+    # The anti-diagonal fires-test must localise the actual tone-step pixels,
+    # not the surrounding field (round-1 critic: coords were 100% field).
+    doc = _doc()
+    pixels: dict[tuple[int, int], RGBA] = {(x, y): RED for y in range(16) for x in range(16)}
+    staircase = [(2, 12), (3, 11), (4, 10), (5, 9), (6, 8), (7, 7)]
+    for (x, y) in staircase:
+        pixels[(x, y)] = BLACK
+    ctx = _ctx(doc, {("idle", "south", 0): _canvas(16, 16, pixels)})
+    report = run_validation(ctx, only=["PIX019"])
+    assert len(report.findings) == 1
+    coords = {tuple(c) for c in report.findings[0].measurements["coords"]}
+    assert all(c in coords for c in staircase)
+
+
+# ---- PIX020: weak silhouette ---------------------------------------------------
+
+
+def test_pix020_fires_on_sparse_silhouette() -> None:
+    doc = _doc()
+    pixels = {(x, x): RED for x in range(6)}  # 6px diagonal: fill 6/36 = 0.17
+    ctx = _ctx(doc, {("idle", "south", 0): _canvas(8, 8, pixels)})
+    report = run_validation(ctx, only=["PIX020"])
+    assert len(report.findings) == 1
+    finding = report.findings[0]
+    assert finding.rule_id == "PIX020"
+    assert finding.severity == "info"
+    assert finding.measurements["coords"] == [[0, 0], [5, 0], [0, 5], [5, 5]]
+
+
+def test_pix020_fires_on_off_centre_mass() -> None:
+    doc = _doc()
+    pixels = {(x, y): RED for x in range(4) for y in range(4)}  # 4x4 block
+    pixels[(7, 7)] = RED  # lone pixel drags the centroid off centre
+    ctx = _ctx(doc, {("idle", "south", 0): _canvas(8, 8, pixels)})
+    report = run_validation(ctx, only=["PIX020"])
+    assert len(report.findings) == 1
+    assert report.findings[0].measurements["off_centre_ratio"] > 0.30
+    assert report.findings[0].measurements["fill_ratio"] >= 0.25
+
+
+def test_pix020_does_not_fire_on_centred_solid_shape() -> None:
+    doc = _doc()
+    pixels = {(x, y): RED for x in range(1, 7) for y in range(1, 7)}  # 6x6 centred
+    ctx = _ctx(doc, {("idle", "south", 0): _canvas(8, 8, pixels)})
+    report = run_validation(ctx, only=["PIX020"])
+    assert report.findings == []

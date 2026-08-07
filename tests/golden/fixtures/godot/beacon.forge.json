@@ -1,5 +1,11 @@
 {
   "animation_player": {
+    "animations": {
+      "spin": {
+        "loop": true,
+        "total_duration_ms": 200
+      }
+    },
     "tracks": [
       {
         "keyframes": [

@@ -16,6 +16,9 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
+import numpy as np
+from numpy.typing import NDArray
+
 from pixel_forge.domain.geometry import anchor_world_pos
 from pixel_forge.domain.palette import ResolvedPalette
 from pixel_forge.errors import RenderError
@@ -143,3 +146,30 @@ def composite(canvas_size: Vec2, layers: Sequence[LayerDraw], palette: ResolvedP
             else:
                 draw_shape(canvas, shape, layer.origin, palette.rgba(shape.color))
     return canvas
+
+
+def composite_tagged(
+    canvas_size: Vec2, layers: Sequence[LayerDraw], palette: ResolvedPalette
+) -> tuple[Canvas, NDArray[np.int64]]:
+    """Composite `layers` and return `(canvas, tags)` where `tags[y, x]` is the index
+    into `layers` of the region that drew that pixel — the TOPMOST region at that
+    pixel (later layers overwrite earlier tags, exactly matching blit order) — or -1
+    for transparent pixels.
+
+    The returned canvas is byte-identical to `composite(canvas_size, layers, palette)`
+    (each layer is drawn onto its own scratch canvas and blitted in the same order),
+    so callers may use this function wherever they need per-region ownership without
+    changing the composed pixels. Deterministic: pure integer rasterisation, layer
+    order fixed by the plan. The tags are what the render-polish pass uses to shade
+    each region against its OWN local geometry (per-region form shading) instead of
+    only the global sprite silhouette.
+    """
+    canvas = Canvas(*canvas_size)
+    h, w = canvas.height, canvas.width
+    tags: NDArray[np.int64] = np.full((h, w), -1, dtype=np.int64)
+    for index, layer in enumerate(layers):
+        scratch = composite(canvas_size, [layer], palette)
+        mask = scratch.array[..., 3] != 0
+        tags[mask] = index
+        canvas.blit(scratch, (0, 0))
+    return canvas, tags

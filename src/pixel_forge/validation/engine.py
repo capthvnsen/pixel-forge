@@ -12,7 +12,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from pixel_forge.animation.resolver import ResolvedFrame
 from pixel_forge.domain.palette import ResolvedPalette
@@ -33,6 +33,10 @@ class RuleContext:
     # (e.g. SRC002 checking for a stray frame file) rather than a rendered Canvas. None
     # in tests that build a RuleContext without a real project on disk.
     asset_dir: Path | None = None
+    # How many rows of the render-polish contact-shadow band the renderer appended
+    # below the sprite's ground line (0 = no polish, or the shadow disabled). Lets
+    # ANI001 measure the sprite's own baseline instead of the shadow's bottom edge.
+    polish_shadow_rows: int = 0
 
 
 Rule = Callable[[RuleContext], list[Finding]]
@@ -97,7 +101,7 @@ def make_finding(
     region: str | None = None,
     message: str,
     remediation: str,
-    measurements: dict[str, float | int | str],
+    measurements: dict[str, Any],
 ) -> Finding:
     """Shared `Finding` constructor so every rule stamps `asset_id` consistently."""
     return Finding(

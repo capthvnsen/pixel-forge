@@ -7,6 +7,7 @@ from pixel_forge.rendering.canvas import Canvas
 from pixel_forge.rendering.external import ExternalFrameBackend, compute_source_pins, verify_pins
 from pixel_forge.rendering.local import (
     LocalRenderBackend,
+    expand_terrain_variants,
     render_asset_frames,
     render_terrain_tiles,
 )
@@ -38,6 +39,7 @@ __all__ = [
     "check_seams",
     "compute_source_pins",
     "draw_shape",
+    "expand_terrain_variants",
     "render_asset_frames",
     "render_terrain_tiles",
     "verify_pins",

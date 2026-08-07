@@ -49,6 +49,7 @@ has a completely different body (tiles, not regions/animations).
 | `preview_format` | `Literal["gif", "webp"]` | `"gif"` | Default format for `generate_preview` when the CLI/MCP caller doesn't override it. |
 | `preview_loop` | `bool` | `True` | Passed through to `write_preview`'s `loop` for the produced GIF/WebP. |
 | `godot` | `bool` | `True` | Declared intent to export to Godot; not currently read as a gate anywhere in `api.py` — `export_godot`/`build_asset` always attempt the export regardless of this flag (documented here as-is; not verified to affect control flow). |
+| `polish` | `bool` | `True` | Opt-out for the render-polish pass (deterministic shading / ambient occlusion / ink outline / ground shadow). ON by default for hand-authored shape-DSL art. `import_region` / `import_sheet` set this to `False` because imported pixels must round-trip byte-exact; docs with an external `source:` block are never polished regardless. |
 
 ### `ValidationOptions`
 
@@ -162,8 +163,8 @@ coordinates are relative to the region's own anchor, not absolute canvas coordin
 | `mirror_safe` | `bool` | `True` | Whether this region participates in the flip-the-canvas mirroring strategy for a mirrored direction. `False` regions are composited unmirrored, on top, using the destination direction's own transforms. |
 | `protected` | `bool` | `False` | Revision operations that would modify this region's shapes (`resize_region`, `translate_region`, `recolor_region`, `set_region_visibility`) raise `OperationError` instead. |
 
-**Shape DSL** — `Shape = PixelShape | LineShape | RectShape | EllipseShape`, discriminated
-on `op`. Every shape has `color` (a palette color id, not a literal RGBA) and `op`.
+**Shape DSL** — `Shape = PixelShape | LineShape | RectShape | EllipseShape | PolygonShape | ArcShape | CurveShape | BezierShape`,
+discriminated on `op`. Every shape has `color` (a palette color id, not a literal RGBA) and `op`.
 
 | Shape | `op` | Extra fields | Meaning |
 |---|---|---|---|
@@ -171,6 +172,12 @@ on `op`. Every shape has `color` (a palette color id, not a literal RGBA) and `o
 | `LineShape` | `"line"` | `start: Vec2`, `end: Vec2` | Integer Bresenham line, endpoints inclusive. |
 | `RectShape` | `"rect"` | `at: Vec2`, `size: Vec2`, `fill: bool = True` | Axis-aligned rectangle; `fill=False` draws only the 1px border. |
 | `EllipseShape` | `"ellipse"` | `at: Vec2`, `size: Vec2`, `fill: bool = True` | Ellipse inscribed in the `at`/`size` box; `fill=False` draws only the boundary ring. |
+| `PolygonShape` | `"polygon"` | `points: list[Vec2]` (≥3), `fill: bool = True` | Even-odd scanline fill with the closed outline post-filled so every corner is inclusive; `fill=False` draws the closed outline only. |
+| `ArcShape` | `"arc"` | `at: Vec2` (centre), `radius: int`, `start_deg: float = 0`, `end_deg: float = 360`, `thickness: int = 1`, `fill: bool = False` | Distance-band arc/annulus. Degrees follow the math convention (0 = +x, positive = clockwise in screen coords); `start == end` (mod 360) is a full circle. |
+| `CurveShape` | `"curve"` | `points: list[Vec2]` (≥2), `thickness: int = 1` | Polyline through the points, drawn with a uniform distance-band stroke. |
+| `BezierShape` | `"bezier"` | `p0: Vec2`, `p1: Vec2`, `p2: Vec2`, `thickness: int = 1` | Quadratic Bézier from `p0` through control `p1` to `p2`, flattened with an integer-derived sample count and drawn with the same distance-band stroke. |
+
+All new rasterizers are deterministic, integer-only (doubled-integer distance checks), alpha strictly 0/255, and clip via the canvas bounds.
 
 **`RegionTransform`** — a per-frame or per-direction-override delta applied to a region.
 
@@ -190,7 +197,8 @@ on `op`. Every shape has `color` (a palette color id, not a literal RGBA) and `o
 | `id` | `str` | required | Referenced by `Shape.color` and `RegionTransform.color_swap`. |
 | `hex` | `str` | required | `#RRGGBB` or `#RRGGBBAA`, validated by regex. |
 | `role` | `str \| None` | `None` | Free-text tag; `PIX010` looks for the substring `"shadow"`/`"light"` in this field. |
-| `ramp` | `str \| None` | `None` | Free-text tag; any non-`None` value counts as "lighting metadata present" for `PIX010`. |
+| `ramp` | `str \| None` | `None` | Free-text tag; any non-`None` value counts as "lighting metadata present" for `PIX010`. Colours sharing a `ramp` id form one material's tonal ramp (see `PIX012`/`PIX014`). |
+| `ramp_steps` | `int` | `3` | How many tonal steps an auto-ramp should generate from this colour's hex (the hex is the mid step) when the palette opts into `auto_ramp`. `1` keeps the colour flat. |
 
 **`Palette`** (aliased as `PaletteRef`)
 
@@ -198,6 +206,10 @@ on `op`. Every shape has `color` (a palette color id, not a literal RGBA) and `o
 |---|---|---|---|
 | `id` | `str` | required | Palette name. |
 | `colors` | `list[PaletteColor]` | `[]` | Must have unique `id`s (validator). |
+| `auto_ramp` | `bool` | `False` | When true, every colour declaring `ramp_steps >= 2` expands to that many tones (shadow..highlight) via `domain/palette.build_ramp`; generated steps share the base's `ramp` group and carry `ramp_steps = 1` so re-expansion is idempotent. |
+| `derive_outline` | `bool` | `False` | When true, a colour id `outline` is derived from the palette's darkest hue-bearing colour (skipping near-black shadow colours) unless one already exists — a dark charcoal tinted by the material's hue, never pure black. |
+
+The render-polish pass (`export.polish`, below) resolves the palette through both of these automatically at render time (`palette_for_polish`), so hand-authored specs get professional ramps and outlines without declaring them.
 
 ## Animation (`schemas/animation.py`)
 

@@ -31,6 +31,7 @@ from pixel_forge.domain import (
     check_palette_limit,
     content_hash,
     load_yaml,
+    palette_for_polish,
     resolve_palette,
     safe_join,
     short,
@@ -58,6 +59,7 @@ from pixel_forge.rendering import (
     build_sprite_sheet,
     check_seams,
     compute_source_pins,
+    expand_terrain_variants,
     render_asset_frames,
     render_terrain_tiles,
     verify_pins,
@@ -75,6 +77,7 @@ from pixel_forge.revisions import (
     record_revision,
 )
 from pixel_forge.schemas import (
+    ArtDirection,
     AssetDocUnion,
     AssetManifest,
     AssetType,
@@ -88,6 +91,7 @@ from pixel_forge.schemas import (
     ProjectConfig,
     PropAsset,
     ProvenanceEntry,
+    QualityReport,
     RevisionDiff,
     RevisionRecord,
     SheetCellManifest,
@@ -97,8 +101,9 @@ from pixel_forge.schemas import (
     ValidationSummary,
     parse_asset_doc,
 )
-from pixel_forge.schemas.asset import TerrainAsset
+from pixel_forge.schemas.asset import SpriteAssetBase, TerrainAsset
 from pixel_forge.validation import RuleContext, run_validation
+from pixel_forge.validation.quality import score_report
 
 SpriteDoc = CharacterAsset | EnemyAsset | PropAsset
 _GODOT_OUTPUT_KEY = "godot"
@@ -259,6 +264,29 @@ def _rel(root: Path, path: Path) -> str:
     return path.relative_to(root).as_posix()
 
 
+def _art_direction(art_direction: ArtDirection | None, doc: AssetDocUnion) -> ArtDirection | None:
+    """Resolve the effective art direction for `doc`.
+
+    An explicit caller override always wins. Otherwise the render-polish pass is
+    ON by default — except for docs that opt out via `export.polish: false`
+    (imported art, whose pixels must round-trip byte-exact) and for docs with
+    an external `source:` block, which render through `ExternalFrameBackend`
+    (final authored pixels, never post-processed).
+    """
+    if art_direction is not None:
+        return art_direction
+    if not doc.export.polish:
+        return None
+    if isinstance(doc, SpriteAssetBase) and doc.source is not None:
+        return None
+    if isinstance(doc, TerrainAsset):
+        # Terrain renders flat with material-tinted sel-out edges, never the
+        # sprite bevel: the per-tile shading/AO/outline stages would raise
+        # every 16px block out of the ground (see ArtDirection.terrain_default).
+        return ArtDirection.terrain_default()
+    return ArtDirection.default()
+
+
 def _project(root: Path) -> Project:
     return Project.load(root)
 
@@ -308,17 +336,60 @@ def _summary(project: Project, doc: AssetDocUnion) -> AssetSummary:
     )
 
 
+def _base_frames(
+    frames: Mapping[tuple[str, str, int] | tuple[str, str, int, int], Canvas],
+) -> dict[tuple[str, str, int], Canvas]:
+    """Keep only the authored frames; drop eased sub-frame keys (anim, dir, idx, k).
+
+    Validation rules and sheet packing operate on authored frames — sub-frames are
+    interpolation artifacts rendered for easing/hold tracks and must not be judged
+    as extra frames (or re-packed into sheets).
+    """
+    return {key: canvas for key, canvas in frames.items() if len(key) == 3}
+
+
 def _validation_report(
     project: Project,
     doc: AssetDocUnion,
     frames: Mapping[tuple[str, str, int], Canvas],
     tiles: Mapping[str, Canvas],
+    *,
+    art_direction: ArtDirection | None = None,
 ) -> ValidationReport:
-    palette = resolve_palette(doc.palette)
+    if art_direction is not None:
+        # The frames were rendered through the polish pass, which quantizes every
+        # pixel it writes onto the palette_for_polish-expanded palette — PIX rules
+        # must judge those frames against that SAME expanded palette, or every
+        # shaded/outlined pixel reads as an unapproved colour (PIX003/PIX004).
+        palette = resolve_palette(palette_for_polish(doc.palette))
+        # ANI001 subtracts the contact-shadow band from each frame's bbox to find
+        # the sprite's own baseline. The renderer clips the shadow to the canvas
+        # (it starts one row below the sprite's ground line and must fit inside
+        # `canvas`), so report the number of rows it can *actually* draw — using
+        # the declared baseline as the ground line — not the configured count,
+        # which over-compensates (and reads as drift) on short canvases.
+        shadow_rows = (
+            art_direction.ground_shadow_rows
+            if art_direction.ground_shadow_enabled and art_direction.ground_shadow_strength > 0
+            else 0
+        )
+        if shadow_rows and doc.asset.baseline_y is not None:
+            canvas_h = doc.asset.canvas[1]
+            shadow_rows = min(shadow_rows, max(0, canvas_h - (doc.asset.baseline_y + 1)))
+        polish_shadow_rows = shadow_rows
+    else:
+        palette = resolve_palette(doc.palette)
+        polish_shadow_rows = 0
     resolved: Sequence[ResolvedFrame] = [] if isinstance(doc, TerrainAsset) else resolve_frames(doc)
     asset_dir = project.paths.asset_dir(doc.asset.id)
     ctx = RuleContext(
-        doc=doc, palette=palette, frames=frames, resolved=resolved, tiles=tiles, asset_dir=asset_dir
+        doc=doc,
+        palette=palette,
+        frames=frames,
+        resolved=resolved,
+        tiles=tiles,
+        asset_dir=asset_dir,
+        polish_shadow_rows=polish_shadow_rows,
     )
     return run_validation(ctx)
 
@@ -435,30 +506,66 @@ def _finish_render(
     )
 
 
-def _terrain_atlas_rows(doc: TerrainAsset) -> list[list[str]] | None:
+def _terrain_atlas_rows(
+    doc: TerrainAsset, cells: Mapping[str, Canvas] | None = None
+) -> list[list[str]] | None:
     """Explicit `build_atlas` row layout for `doc`'s tiles: each animated tile gets its
     own row, frames contiguous from column 0 -- so Godot's animation-strip contiguity
     requirement holds structurally rather than by accident of sorted-key packing. Static
-    tiles (everything not itself an animated tile's frame) fill one more row, sorted.
-    `None` (the default sorted-key atlas) when `doc` has no animated tiles, so nothing
-    changes for terrain assets without animated water/lava/etc tiles."""
+    tiles (everything not itself an animated tile's frame) fill one more row, sorted --
+    including any generated variation cells (`grass.v1`, ...) when `cells` is the
+    variant-expanded atlas map. `None` (the default sorted-key atlas) when `doc` has no
+    animated tiles, so nothing changes for terrain assets without animated water/lava/etc
+    tiles."""
     if not doc.animated_tiles:
         return None
     frame_ids = {tile_id for spec in doc.animated_tiles.values() for tile_id in spec.frames}
     rows = [list(doc.animated_tiles[name].frames) for name in sorted(doc.animated_tiles)]
-    static_ids = sorted(tile_id for tile_id in doc.tiles if tile_id not in frame_ids)
+    static_ids = sorted(tile_id for tile_id in (cells or doc.tiles) if tile_id not in frame_ids)
     if static_ids:
         rows.append(static_ids)
     return rows
 
 
+def _terrain_cell_count(doc: TerrainAsset) -> int:
+    """How many atlas cells `doc` produces once `TileSpec.variations` are
+    expanded: every animation-frame tile is one cell, every static tile is
+    `max(1, variations)` cells (the base plus its generated variants)."""
+    frame_ids = {tile_id for spec in doc.animated_tiles.values() for tile_id in spec.frames}
+    return sum(
+        1 if tile_id in frame_ids else max(1, spec.variations)
+        for tile_id, spec in doc.tiles.items()
+    )
+
+
+def _terrain_atlas_cells(
+    doc: TerrainAsset, tiles: Mapping[str, Canvas], art_direction: ArtDirection | None
+) -> dict[str, Canvas]:
+    """The atlas cell map for `doc`: base tiles plus the generated variation
+    cells each tile's `TileSpec.variations` declares. Variants are expanded
+    against the polish-expanded palette when the tiles were polished (so the
+    scatter uses each material's own ramp tones) and the declared palette
+    otherwise; either way the expansion is deterministic and seam-preserving."""
+    palette = (
+        resolve_palette(palette_for_polish(doc.palette))
+        if art_direction is not None
+        else resolve_palette(doc.palette)
+    )
+    return expand_terrain_variants(doc, tiles, palette)
+
+
 def _render_terrain(
-    project: Project, doc: TerrainAsset, *, force: bool, dry_run: bool
+    project: Project,
+    doc: TerrainAsset,
+    *,
+    force: bool,
+    dry_run: bool,
+    art_direction: ArtDirection | None,
 ) -> RenderResult:
     build_dir = project.paths.build_asset_dir(doc.asset.id)
     spec_hash = content_hash(doc)
     sheet_path = _rel(project.root, build_dir / f"{doc.asset.id}_atlas.png")
-    expected_count = len(doc.tiles)
+    expected_count = _terrain_cell_count(doc)
 
     existing = _existing_manifest(build_dir)
     if not force and existing is not None and existing.spec_hash == spec_hash:
@@ -485,8 +592,9 @@ def _render_terrain(
         )
 
     build_dir.mkdir(parents=True, exist_ok=True)
-    tile_canvases = render_terrain_tiles(doc)
-    atlas, atlas_cells = build_atlas(tile_canvases, rows=_terrain_atlas_rows(doc))
+    tile_canvases = render_terrain_tiles(doc, art_direction=art_direction)
+    atlas_tiles = _terrain_atlas_cells(doc, tile_canvases, art_direction)
+    atlas, atlas_cells = build_atlas(atlas_tiles, rows=_terrain_atlas_rows(doc, atlas_tiles))
     atlas.save_png(project.root / sheet_path)
     tile_size = next(iter(doc.tiles.values())).size
     tw, th = tile_size
@@ -497,7 +605,7 @@ def _render_terrain(
         cell_size=tile_size,
         cells=_cells_manifest(list(atlas_cells.values())),
     )
-    report = _validation_report(project, doc, {}, tile_canvases)
+    report = _validation_report(project, doc, {}, tile_canvases, art_direction=art_direction)
 
     return _finish_render(
         build_dir,
@@ -509,7 +617,7 @@ def _render_terrain(
         sheet_path=sheet_path,
         contact_sheet_path=None,
         frame_paths=[],
-        frames_written=len(tile_canvases),
+        frames_written=len(atlas_tiles),
     )
 
 
@@ -539,11 +647,17 @@ def _sprite_backend(project: Project, doc: SpriteDoc) -> RenderBackend | None:
     return ExternalFrameBackend(project.paths.asset_dir(doc.asset.id))
 
 
-def _sprite_sheet(project: Project, doc: SpriteDoc) -> SpriteSheet:
+def _sprite_sheet(
+    project: Project, doc: SpriteDoc, *, art_direction: ArtDirection | None = None
+) -> SpriteSheet:
     """Render every frame and pack it into a sprite sheet — the shared setup behind
     `render_annotated_contact` and `render_contact_sheet`."""
     resolved = resolve_frames(doc)
-    frames = render_asset_frames(doc, _sprite_backend(project, doc))
+    frames = render_asset_frames(
+        doc,
+        _sprite_backend(project, doc),
+        art_direction=_art_direction(art_direction, doc),
+    )
     return build_sprite_sheet(
         [(f, frames[(f.animation, f.direction, f.index)]) for f in resolved],
         doc.asset.canvas,
@@ -551,7 +665,14 @@ def _sprite_sheet(project: Project, doc: SpriteDoc) -> SpriteSheet:
     )
 
 
-def _render_sprite(project: Project, doc: SpriteDoc, *, force: bool, dry_run: bool) -> RenderResult:
+def _render_sprite(
+    project: Project,
+    doc: SpriteDoc,
+    *,
+    force: bool,
+    dry_run: bool,
+    art_direction: ArtDirection | None,
+) -> RenderResult:
     build_dir = project.paths.build_asset_dir(doc.asset.id)
     spec_hash = content_hash(doc)
     resolved = resolve_frames(doc)
@@ -593,7 +714,7 @@ def _render_sprite(project: Project, doc: SpriteDoc, *, force: bool, dry_run: bo
         )
 
     build_dir.mkdir(parents=True, exist_ok=True)
-    frames = render_asset_frames(doc, _sprite_backend(project, doc))
+    frames = render_asset_frames(doc, _sprite_backend(project, doc), art_direction=art_direction)
     frames_dir.mkdir(parents=True, exist_ok=True)
     for f in resolved:
         canvas = frames[(f.animation, f.direction, f.index)]
@@ -612,7 +733,7 @@ def _render_sprite(project: Project, doc: SpriteDoc, *, force: bool, dry_run: bo
         cell_size=doc.asset.canvas,
         cells=_cells_manifest(list(sheet.cells)),
     )
-    report = _validation_report(project, doc, frames, {})
+    report = _validation_report(project, doc, _base_frames(frames), {}, art_direction=art_direction)
 
     return _finish_render(
         build_dir,
@@ -628,28 +749,72 @@ def _render_sprite(project: Project, doc: SpriteDoc, *, force: bool, dry_run: bo
     )
 
 
-def _render(project: Project, doc: AssetDocUnion, *, force: bool, dry_run: bool) -> RenderResult:
+def _render(
+    project: Project,
+    doc: AssetDocUnion,
+    *,
+    force: bool,
+    dry_run: bool,
+    art_direction: ArtDirection | None = None,
+) -> RenderResult:
+    resolved = _art_direction(art_direction, doc)
     if isinstance(doc, TerrainAsset):
-        return _render_terrain(project, doc, force=force, dry_run=dry_run)
-    return _render_sprite(project, doc, force=force, dry_run=dry_run)
+        return _render_terrain(project, doc, force=force, dry_run=dry_run, art_direction=resolved)
+    return _render_sprite(project, doc, force=force, dry_run=dry_run, art_direction=resolved)
 
 
 def render_asset(
-    root: Path, asset_id: str, *, force: bool = False, dry_run: bool = False
+    root: Path,
+    asset_id: str,
+    *,
+    force: bool = False,
+    dry_run: bool = False,
+    art_direction: ArtDirection | None = None,
 ) -> RenderResult:
     project = _project(root)
     doc = _load_doc(project, asset_id)
-    return _render(project, doc, force=force, dry_run=dry_run)
+    return _render(project, doc, force=force, dry_run=dry_run, art_direction=art_direction)
 
 
-def validate_asset(root: Path, asset_id: str) -> ValidationReport:
+def validate_asset(
+    root: Path, asset_id: str, *, art_direction: ArtDirection | None = None
+) -> ValidationReport:
     project = _project(root)
     doc = _load_doc(project, asset_id)
+    resolved = _art_direction(art_direction, doc)
     if isinstance(doc, TerrainAsset):
-        return _validation_report(project, doc, {}, render_terrain_tiles(doc))
+        return _validation_report(
+            project,
+            doc,
+            {},
+            render_terrain_tiles(doc, art_direction=resolved),
+            art_direction=resolved,
+        )
     return _validation_report(
-        project, doc, render_asset_frames(doc, _sprite_backend(project, doc)), {}
+        project,
+        doc,
+        _base_frames(
+            render_asset_frames(doc, _sprite_backend(project, doc), art_direction=resolved)
+        ),
+        {},
+        art_direction=resolved,
     )
+
+
+def quality_asset(
+    root: Path, asset_id: str, *, art_direction: ArtDirection | None = None
+) -> QualityReport:
+    """Machine-readable quality score + repair feedback for an asset.
+
+    Wraps `validate_asset` and scores the resulting report deterministically via
+    `validation.quality.score_report` (a pure function of the report — no
+    re-rendering, no rule re-runs). Returns a `QualityReport` with a 0-100
+    `score`, a `verdict`, and one `QualityIssue` per finding carrying a machine
+    `type`, pixel `coordinates` when the rule localised them, and a
+    `suggested_fix` an agent can act on.
+    """
+    report = validate_asset(root, asset_id, art_direction=art_direction)
+    return score_report(report)
 
 
 def generate_preview(
@@ -659,6 +824,7 @@ def generate_preview(
     fmt: Literal["gif", "webp"] | None = None,
     scale: int = 1,
     dry_run: bool = False,
+    art_direction: ArtDirection | None = None,
 ) -> PreviewResult:
     project = _project(root)
     doc = _load_doc(project, asset_id)
@@ -669,7 +835,9 @@ def generate_preview(
         )
     resolved_fmt = fmt or doc.export.preview_format
     build_dir = project.paths.build_asset_dir(asset_id)
-    frames = render_asset_frames(doc, _sprite_backend(project, doc))
+    frames = render_asset_frames(
+        doc, _sprite_backend(project, doc), art_direction=_art_direction(art_direction, doc)
+    )
 
     all_frames = resolve_frames(doc)
     preview_paths: dict[str, str] = {}
@@ -708,23 +876,39 @@ def _require_texture_on_disk(project: Project, rel_path: str, asset_id: str) -> 
         )
 
 
-def export_godot(root: Path, asset_id: str, *, dry_run: bool = False) -> GodotManifest:
+def export_godot(
+    root: Path,
+    asset_id: str,
+    *,
+    dry_run: bool = False,
+    art_direction: ArtDirection | None = None,
+) -> GodotManifest:
     project = _project(root)
     doc = _load_doc(project, asset_id)
     spec_hash = content_hash(doc)
     build_dir = project.paths.build_asset_dir(asset_id)
     godot_dir = project.paths.build_godot_dir()
+    direction = _art_direction(art_direction, doc)
 
     if isinstance(doc, TerrainAsset):
-        tiles = render_terrain_tiles(doc)
-        _, atlas_cells = build_atlas(tiles, rows=_terrain_atlas_rows(doc))
+        tiles = render_terrain_tiles(doc, art_direction=direction)
+        atlas_tiles = _terrain_atlas_cells(doc, tiles, direction)
+        _, atlas_cells = build_atlas(atlas_tiles, rows=_terrain_atlas_rows(doc, atlas_tiles))
         atlas_rel = _rel(project.root, build_dir / f"{asset_id}_atlas.png")
         _require_texture_on_disk(project, atlas_rel, asset_id)
+        # Variation cells are visual variety in the atlas texture, not Godot
+        # tiles: the manifest describes only the declared tile ids (and
+        # animation frames), so `build_tileset` never sees `grass.v1` cells.
+        godot_cells = {
+            tile_id: cell
+            for tile_id, cell in atlas_cells.items()
+            if tile_id in doc.tiles
+        }
         manifest = build_godot_manifest(
-            doc, texture_paths={"atlas": atlas_rel}, spec_hash=spec_hash, atlas_cells=atlas_cells
+            doc, texture_paths={"atlas": atlas_rel}, spec_hash=spec_hash, atlas_cells=godot_cells
         )
     else:
-        frames = render_asset_frames(doc, _sprite_backend(project, doc))
+        frames = render_asset_frames(doc, _sprite_backend(project, doc), art_direction=direction)
         resolved = resolve_frames(doc)
         sheet = build_sprite_sheet(
             [(f, frames[(f.animation, f.direction, f.index)]) for f in resolved],
@@ -750,20 +934,38 @@ def export_godot(root: Path, asset_id: str, *, dry_run: bool = False) -> GodotMa
 
 
 def apply_asset_operation(
-    root: Path, asset_id: str, op: OperationSpec, *, timestamp: str, dry_run: bool = False
+    root: Path,
+    asset_id: str,
+    op: OperationSpec,
+    *,
+    timestamp: str,
+    dry_run: bool = False,
+    art_direction: ArtDirection | None = None,
 ) -> RevisionRecord:
     project = _project(root)
     doc_before = _load_doc(project, asset_id)
     doc_after, inverse = apply_operation(doc_before, op)
+    direction = _art_direction(art_direction, doc_after)
 
     if isinstance(doc_after, TerrainAsset):
-        report = _validation_report(project, doc_after, {}, render_terrain_tiles(doc_after))
+        report = _validation_report(
+            project,
+            doc_after,
+            {},
+            render_terrain_tiles(doc_after, art_direction=direction),
+            art_direction=direction,
+        )
     else:
         report = _validation_report(
             project,
             doc_after,
-            render_asset_frames(doc_after, _sprite_backend(project, doc_after)),
+            _base_frames(
+                render_asset_frames(
+                    doc_after, _sprite_backend(project, doc_after), art_direction=direction
+                )
+            ),
             {},
+            art_direction=direction,
         )
 
     if dry_run:
@@ -817,12 +1019,15 @@ def update_asset_spec(
     *,
     timestamp: str,
     dry_run: bool = False,
+    art_direction: ArtDirection | None = None,
 ) -> RevisionRecord:
     """Replace an asset's entire spec document in one shot, recorded as a
     `replace_spec` revision (see `revisions.operations`), for structural edits the
     named operations in `apply_asset_operation` don't cover."""
     op = OperationSpec(name="replace_spec", params={"spec": dict(spec)})
-    return apply_asset_operation(root, asset_id, op, timestamp=timestamp, dry_run=dry_run)
+    return apply_asset_operation(
+        root, asset_id, op, timestamp=timestamp, dry_run=dry_run, art_direction=art_direction
+    )
 
 
 def pin_asset_source(
@@ -1006,6 +1211,9 @@ def import_region(
         spec["regions"][region]["shapes"] = [shape_json]
     else:
         spec["regions"][region]["shapes"].append(shape_json)
+    # Imported pixels are authored elsewhere and must round-trip byte-exact;
+    # the render-polish pass would recolor silhouette edges, so opt out.
+    spec.setdefault("export", {})["polish"] = False
 
     record = update_asset_spec(root, asset_id, spec, timestamp=timestamp, dry_run=dry_run)
 
@@ -1130,7 +1338,7 @@ def import_sheet(
                 "frames": [{"duration_ms": frame_duration_ms} for _ in range(frames_per_cell)],
             }
         },
-        "export": {},
+        "export": {"polish": False},  # imported sheet art is final; never polish
         "validation": {"palette_limit": palette_limit},
     }
 
@@ -1165,6 +1373,7 @@ def render_view(
     frame: int = 0,
     scale: int = 8,
     out_path: str | Path | None = None,
+    art_direction: ArtDirection | None = None,
 ) -> ViewResult:
     """Render one frame with the vision-loop diagnostic overlays (declared baseline,
     every anchor, the frame's silhouette bbox, and an 8-source-pixel grid once
@@ -1176,7 +1385,9 @@ def render_view(
     """
     project = _project(root)
     doc = _require_sprite_doc(_load_doc(project, asset_id), "render_view")
-    frames = render_asset_frames(doc, _sprite_backend(project, doc))
+    frames = render_asset_frames(
+        doc, _sprite_backend(project, doc), art_direction=_art_direction(art_direction, doc)
+    )
     key = (animation, direction, frame)
     canvas = frames.get(key)
     if canvas is None:
@@ -1209,7 +1420,12 @@ def render_view(
 
 
 def render_annotated_contact(
-    root: Path, asset_id: str, *, scale: int = 4, out_path: str | Path | None = None
+    root: Path,
+    asset_id: str,
+    *,
+    scale: int = 4,
+    out_path: str | Path | None = None,
+    art_direction: ArtDirection | None = None,
 ) -> ViewResult:
     """Build the asset's sprite sheet and draw the vision-loop diagnostic overlays
     (baseline, anchors, per-cell silhouette bbox) onto a scaled copy, written to a PNG
@@ -1220,7 +1436,7 @@ def render_annotated_contact(
     """
     project = _project(root)
     doc = _require_sprite_doc(_load_doc(project, asset_id), "render_annotated_contact")
-    sheet = _sprite_sheet(project, doc)
+    sheet = _sprite_sheet(project, doc, art_direction=art_direction)
     contact = build_annotated_contact(
         sheet, baseline_y=doc.asset.baseline_y, anchors=doc.anchors, scale=scale
     )
@@ -1240,7 +1456,12 @@ def render_annotated_contact(
 
 
 def render_contact_sheet(
-    root: Path, asset_id: str, *, scale: int = 1, out_path: str | Path | None = None
+    root: Path,
+    asset_id: str,
+    *,
+    scale: int = 1,
+    out_path: str | Path | None = None,
+    art_direction: ArtDirection | None = None,
 ) -> ViewResult:
     """Plain (non-diagnostic) contact sheet at an arbitrary scale, for `pixel-forge
     contact` without `--annotate`. Unlike `render_asset`'s cached contact_sheet output
@@ -1250,7 +1471,7 @@ def render_contact_sheet(
     """
     project = _project(root)
     doc = _require_sprite_doc(_load_doc(project, asset_id), "render_contact_sheet")
-    sheet = _sprite_sheet(project, doc)
+    sheet = _sprite_sheet(project, doc, art_direction=art_direction)
     contact = build_contact_sheet(sheet, scale=scale)
     rel_path = (
         str(out_path) if out_path is not None else f"build/{asset_id}/{asset_id}_contact_view.png"
@@ -1326,14 +1547,16 @@ def inspect_asset(root: Path, asset_id: str) -> AssetInspection:
     )
 
 
-def test_seams(root: Path, asset_id: str) -> SeamReport:
+def test_seams(
+    root: Path, asset_id: str, *, art_direction: ArtDirection | None = None
+) -> SeamReport:
     project = _project(root)
     doc = _load_doc(project, asset_id)
     if not isinstance(doc, TerrainAsset):
         raise ForgeError(
             f"asset {asset_id!r} is not a terrain asset; seam testing applies to terrain tiles only"
         )
-    tiles = render_terrain_tiles(doc)
+    tiles = render_terrain_tiles(doc, art_direction=_art_direction(art_direction, doc))
     results = check_seams(tiles)
 
     seam_map_path: str | None = None
@@ -1365,7 +1588,12 @@ def test_seams(root: Path, asset_id: str) -> SeamReport:
 
 
 def build_asset(
-    root: Path, asset_id: str, *, force: bool = False, timestamp: str | None = None
+    root: Path,
+    asset_id: str,
+    *,
+    force: bool = False,
+    timestamp: str | None = None,
+    art_direction: ArtDirection | None = None,
 ) -> AssetManifest:
     project = _project(root)
     doc = _load_doc(project, asset_id)
@@ -1382,16 +1610,18 @@ def build_asset(
     ):
         return cached
 
-    _render(project, doc, force=True, dry_run=False)
+    _render(project, doc, force=True, dry_run=False, art_direction=art_direction)
     rendered = _existing_manifest(build_dir)
     if rendered is None:
         raise ForgeError(f"internal error: render_asset did not write a manifest for {asset_id!r}")
 
     preview_paths: dict[str, str] = {}
     if not isinstance(doc, TerrainAsset):
-        preview_paths = generate_preview(project.root, asset_id).preview_paths
+        preview_paths = generate_preview(
+            project.root, asset_id, art_direction=art_direction
+        ).preview_paths
 
-    export_godot(project.root, asset_id)
+    export_godot(project.root, asset_id, art_direction=art_direction)
     godot_rel = _rel(project.root, project.paths.build_godot_dir() / f"{asset_id}.forge.json")
 
     manifest = AssetManifest(
@@ -1407,13 +1637,15 @@ def build_asset(
     return manifest
 
 
-def build_all(root: Path, *, force: bool = False) -> BuildReport:
+def build_all(
+    root: Path, *, force: bool = False, art_direction: ArtDirection | None = None
+) -> BuildReport:
     project = _project(root)
     manifests: list[AssetManifest] = []
     failed: list[str] = []
     for asset_id in project.discover_assets():
         try:
-            manifest = build_asset(root, asset_id, force=force)
+            manifest = build_asset(root, asset_id, force=force, art_direction=art_direction)
         except ForgeError:
             failed.append(asset_id)
             continue

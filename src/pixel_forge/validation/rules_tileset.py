@@ -1,8 +1,11 @@
-"""Tileset-integrity rules: terrain-only checks (TIL001-TIL007)."""
+"""Tileset-integrity rules: terrain-only checks (TIL001-TIL008)."""
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 from pixel_forge.rendering.sheet import check_seams
+from pixel_forge.rendering.terrain import check_transition_blends, interior_detail_positions
 from pixel_forge.schemas import Finding, TerrainAsset
 from pixel_forge.validation.engine import RuleContext, make_finding, register
 
@@ -124,6 +127,21 @@ def _til003(ctx: RuleContext) -> list[Finding]:
         if result.mismatched_pixels <= threshold:
             continue
         is_self_pair = result.tile_a == result.tile_b
+        if not is_self_pair:
+            tile_a = doc.tiles.get(result.tile_a)
+            tile_b = doc.tiles.get(result.tile_b)
+            # Different-material cross-pairs are transition-tile cases, not
+            # defects: a grass edge (dark green) is *supposed* to differ from a
+            # dirt edge (dark brown) — the terrain's transition tiles exist to
+            # bridge them. Only same-material cross-pairs must tile seamlessly.
+            # A tile without a declared terrain is an opaque material distinct
+            # from everything else (the ring tint treats it that way), so a pair
+            # with either side undeclared is also exempt.
+            if tile_a is not None and tile_b is not None:
+                if tile_a.terrain is None or tile_b.terrain is None:
+                    continue
+                if tile_a.terrain != tile_b.terrain:
+                    continue
         findings.append(
             make_finding(
                 ctx,
@@ -371,4 +389,151 @@ def _til007(ctx: RuleContext) -> list[Finding]:
                     },
                 )
             )
+    return findings
+
+
+# --- TIL008: one-sided interior detail (heuristic) ---------------------------------
+#
+# Transition tiles and animated-tile frames are exempt: their asymmetry is the
+# point (a grass patch encroaching from the north, a shimmer wandering between
+# frames). Everything else should scatter its detail across both axes.
+
+
+_TIL008_MIN_DETAIL = 3  # fewer detail pixels than this is a spot, not a bias
+
+
+def _imbalance_side(
+    positions: Sequence[tuple[int, int]], width: int, height: int
+) -> str | None:
+    """Human name for the region all `positions` share, when they sit on one
+    side of the tile's centre on at least one axis; None when the detail spans
+    both halves of both axes. `width`/`height` are the full tile size; the
+    geometric centre splits them."""
+    half_w = width / 2.0
+    half_h = height / 2.0
+    all_left = all(x < half_w for x, _ in positions)
+    all_right = all(x >= half_w for x, _ in positions)
+    all_top = all(y < half_h for _, y in positions)
+    all_bottom = all(y >= half_h for _, y in positions)
+    horizontal = "left" if all_left else "right" if all_right else None
+    vertical = "top" if all_top else "bottom" if all_bottom else None
+    if horizontal is not None and vertical is not None:
+        return f"{vertical}-{horizontal} quadrant"
+    if horizontal is not None:
+        return f"{horizontal} half"
+    if vertical is not None:
+        return f"{vertical} half"
+    return None
+
+
+@register(
+    "TIL008",
+    severity="warning",
+    kind="heuristic",
+    applies_to=_TERRAIN,
+    description=(
+        "Visual imbalance: a tile whose interior detail pixels all sit on one "
+        "side of the tile's centre reads as lopsided. Transition tiles and "
+        "animated-tile frames are exempt — their asymmetry is intentional."
+    ),
+)
+def _til008(ctx: RuleContext) -> list[Finding]:
+    doc = _terrain_doc(ctx)
+    if doc is None or not ctx.tiles:
+        return []
+    exempt: set[str] = {transition.tile_id for transition in doc.transitions}
+    for spec in doc.animated_tiles.values():
+        exempt.update(spec.frames)
+    findings: list[Finding] = []
+    for tile_id, canvas in sorted(ctx.tiles.items()):
+        if tile_id in exempt:
+            continue
+        positions = interior_detail_positions(canvas, ctx.palette)
+        if len(positions) < _TIL008_MIN_DETAIL:
+            continue
+        side = _imbalance_side(positions, canvas.width, canvas.height)
+        if side is None:
+            continue
+        findings.append(
+            make_finding(
+                ctx,
+                "TIL008",
+                "warning",
+                "heuristic",
+                message=(
+                    f"tile {tile_id!r} interior detail is imbalanced: all "
+                    f"{len(positions)} detail pixels sit in the {side} of the tile"
+                ),
+                remediation=(
+                    "scatter interior detail across both axes (a few blades or "
+                    "pebbles in each region, not one clump); transition tiles and "
+                    "animation frames are exempt by design"
+                ),
+                measurements={
+                    "tile_id": tile_id,
+                    "detail_pixel_count": len(positions),
+                    "region": side,
+                },
+            )
+        )
+    return findings
+
+
+# --- TIL009: hard transition boundaries (heuristic) ---------------------------
+#
+# The shipped blend checker (`rendering.terrain.check_transition_blends`)
+# judges every declared transition tile's boundary: it must step/interleave
+# into a ~2px blend zone across most of its extent, not a hard 1px line (or a
+# couple of sparse weeds). The demo tileset's straight-rect patches trip it —
+# that is the point: `pixel-forge validate` must *report* hard transitions so
+# an author knows the boundary reads as a cut, not a blend.
+
+
+@register(
+    "TIL009",
+    severity="warning",
+    kind="heuristic",
+    applies_to=_TERRAIN,
+    description=(
+        "Hard transition boundary: a transition tile whose interior boundary "
+        "blend zone is narrower than the ~2px professional target, or that "
+        "only interleaves across a small fraction of its boundary columns/rows "
+        "(sparse weeds), reads as a hard cut instead of a blended edge."
+    ),
+)
+def _til009(ctx: RuleContext) -> list[Finding]:
+    doc = _terrain_doc(ctx)
+    if doc is None or not ctx.tiles or not doc.transitions:
+        return []
+    findings: list[Finding] = []
+    for report in check_transition_blends(doc, ctx.tiles, ctx.palette):
+        if not report.is_hard:
+            continue
+        findings.append(
+            make_finding(
+                ctx,
+                "TIL009",
+                "warning",
+                "heuristic",
+                message=(
+                    f"transition {report.from_terrain}->{report.to_terrain} "
+                    f"(mask {report.mask}, tile {report.tile_id!r}) has a hard "
+                    f"boundary: {report.note or 'no blend zone at all'}"
+                ),
+                remediation=(
+                    "step or interleave the patch edge ~2px across most of the "
+                    "boundary (staggered blocks, tufts, weeds) so it reads as a "
+                    "blended transition rather than a single hard line"
+                ),
+                measurements={
+                    "tile_id": report.tile_id,
+                    "mask": report.mask,
+                    "from_terrain": report.from_terrain,
+                    "to_terrain": report.to_terrain,
+                    "blend_width": report.blend_width,
+                    "blend_coverage": report.blend_coverage,
+                    "boundary_columns": report.boundary_columns,
+                },
+            )
+        )
     return findings

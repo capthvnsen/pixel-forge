@@ -135,6 +135,59 @@ def test_til003_does_not_fire_on_uniform_self_tiling_tile() -> None:
     assert report.findings == []
 
 
+def test_til003_ignores_different_terrain_cross_pairs() -> None:
+    # Material-tinted sel-out edges (dark green grass vs dark brown dirt) mean a
+    # grass tile and a dirt tile legitimately differ at the edge — that's what
+    # transition tiles bridge. TIL003 must not flag different-terrain pairs.
+    doc = _terrain_doc(
+        tiles={
+            "grass_a": _tile(terrain="grass"),
+            "dirt_a": _tile(terrain="dirt"),
+        }
+    )
+    # Same-size tiles with DIFFERENT edge colours (grass green vs dirt brown).
+    grass = Canvas(4, 4)
+    grass.draw_rect((0, 0), (4, 4), RED, fill=True)  # red edge family
+    dirt = Canvas(4, 4)
+    dirt.draw_rect((0, 0), (4, 4), BLUE, fill=True)  # blue edge family
+    ctx = _ctx(doc, {"grass_a": grass, "dirt_a": dirt})
+    report = run_validation(ctx, only=["TIL003"])
+    assert report.findings == []
+
+
+def test_til003_ignores_pair_with_undeclared_terrain() -> None:
+    # A tile with no declared terrain is an opaque material distinct from
+    # everything else (the ring tint treats it that way): grass next to
+    # water-without-a-terrain-field is a shoreline, not a seam defect.
+    doc = _terrain_doc(
+        tiles={
+            "grass_a": _tile(terrain="grass"),
+            "water_a": _tile(),  # no terrain declared
+        }
+    )
+    grass = Canvas(4, 4)
+    grass.draw_rect((0, 0), (4, 4), RED, fill=True)
+    water = Canvas(4, 4)
+    water.draw_rect((0, 0), (4, 4), BLUE, fill=True)
+    ctx = _ctx(doc, {"grass_a": grass, "water_a": water})
+    report = run_validation(ctx, only=["TIL003"])
+    assert report.findings == []
+
+
+def test_til003_still_flags_same_terrain_cross_pair() -> None:
+    # Two tiles of the SAME material whose edges mismatch is a real defect:
+    # neighbouring grass tiles must tile seamlessly against each other.
+    doc = _terrain_doc(tiles={"grass_a": _tile(terrain="grass"), "grass_b": _tile(terrain="grass")})
+    grass_a = Canvas(4, 4)
+    grass_a.draw_rect((0, 0), (4, 4), RED, fill=True)
+    grass_b = Canvas(4, 4)
+    grass_b.draw_rect((0, 0), (4, 4), BLUE, fill=True)
+    ctx = _ctx(doc, {"grass_a": grass_a, "grass_b": grass_b})
+    report = run_validation(ctx, only=["TIL003"])
+    assert len(report.findings) >= 1
+    assert all(f.severity == "warning" for f in report.findings)  # cross-pair, not self
+
+
 # ---- TIL004: animated seam error -----------------------------------------------------
 
 
@@ -238,4 +291,68 @@ def test_til007_does_not_fire_within_repeat_ratio() -> None:
     )
     ctx = _ctx(doc, {})
     report = run_validation(ctx, only=["TIL007"])
+    assert report.findings == []
+
+
+# ---- TIL008: one-sided interior detail (heuristic) -----------------------------------
+
+
+def _imbalanced_tile() -> Canvas:
+    """8x8 tile with 6 detail pixels all in the top-left quadrant."""
+    c = Canvas(8, 8)
+    c.draw_rect((0, 0), (8, 8), RED, fill=True)  # border ring + RED-dominant interior
+    for x, y in ((1, 1), (1, 2), (1, 3), (2, 1), (2, 2), (2, 3)):
+        c.set_pixel(x, y, BLUE)
+    return c
+
+
+def test_til008_fires_on_one_sided_detail() -> None:
+    doc = _terrain_doc(tiles={"grass_a": _tile(size=(8, 8))})
+    ctx = _ctx(doc, {"grass_a": _imbalanced_tile()})
+    report = run_validation(ctx, only=["TIL008"])
+    assert len(report.findings) == 1
+    finding = report.findings[0]
+    assert finding.rule_id == "TIL008"
+    assert finding.severity == "warning"
+    assert finding.kind == "heuristic"
+    assert "top-left" in finding.message
+    assert finding.measurements["tile_id"] == "grass_a"
+
+
+def test_til008_does_not_fire_on_balanced_detail() -> None:
+    doc = _terrain_doc(tiles={"grass_a": _tile(size=(8, 8))})
+    c = Canvas(8, 8)
+    c.draw_rect((0, 0), (8, 8), RED, fill=True)
+    for x, y in ((1, 1), (6, 1), (1, 6), (6, 6), (3, 4), (4, 3)):
+        c.set_pixel(x, y, BLUE)  # detail spans every quadrant
+    ctx = _ctx(doc, {"grass_a": c})
+    report = run_validation(ctx, only=["TIL008"])
+    assert report.findings == []
+
+
+def test_til008_does_not_fire_on_transition_tile() -> None:
+    doc = _terrain_doc(
+        tiles={"grass_a": _tile(size=(8, 8))},
+        transitions=[
+            {
+                "from_terrain": "grass",
+                "to_terrain": "dirt",
+                "tile_id": "grass_a",
+                "mask": "N",
+            }
+        ],
+    )
+    ctx = _ctx(doc, {"grass_a": _imbalanced_tile()})  # one-sided, but it is a transition
+    report = run_validation(ctx, only=["TIL008"])
+    assert report.findings == []
+
+
+def test_til008_does_not_fire_on_sparse_detail() -> None:
+    doc = _terrain_doc(tiles={"grass_a": _tile(size=(8, 8))})
+    c = Canvas(8, 8)
+    c.draw_rect((0, 0), (8, 8), RED, fill=True)
+    for x, y in ((1, 1), (2, 2)):
+        c.set_pixel(x, y, BLUE)  # two pixels is a spot, not a directional bias
+    ctx = _ctx(doc, {"grass_a": c})
+    report = run_validation(ctx, only=["TIL008"])
     assert report.findings == []

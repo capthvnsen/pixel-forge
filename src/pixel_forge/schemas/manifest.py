@@ -152,15 +152,42 @@ class AnimationPlayerTrack(BaseModel):
     keyframes: list[AnimationKeyframe] = Field(default_factory=list)
 
 
+class AnimationPlayerAnimation(BaseModel):
+    """Per-animation metadata for the plugin's `Animation` resources.
+
+    `total_duration_ms` is the exact integer sum of the animation's `FrameSpec`
+    durations — the true end-to-end length *including the last frame's hold*.
+    The plugin sets `Animation.length` from this; without it the plugin could
+    only infer the last keyframe's *start* time, silently dropping the final
+    frame's duration (e.g. a 90/90/90/220ms opening is 490ms, not 270ms).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    total_duration_ms: int = Field(ge=1)
+    loop: bool = True
+
+
 class AnimationPlayerExport(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     tracks: list[AnimationPlayerTrack] = Field(default_factory=list)
+    #: animation name -> duration/loop metadata. This dict is the authoritative
+    #: list of `Animation` resources to build: an animation whose regions only
+    #: colour-swap (or never change) has no keyframe track, and without this
+    #: entry it would silently produce no resource at all.
+    animations: dict[str, AnimationPlayerAnimation] = Field(default_factory=dict)
 
 
 class GodotImportSettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    #: Godot 4 has no per-texture import-time filter flag — filtering is draw-time
+    #: (`CanvasItem.texture_filter` / the project setting
+    #: `rendering/textures/canvas_textures/default_texture_filter`). The sample
+    #: project ships `default_texture_filter=0` (nearest), and the plugin sets
+    #: `TEXTURE_FILTER_NEAREST` on the CanvasItems it constructs; this field exists
+    #: so the manifest states the intent explicitly.
     filter: Literal["nearest"] = "nearest"
     mipmaps: bool = False
     compress_mode: Literal["lossless"] = "lossless"
@@ -183,5 +210,10 @@ class GodotManifest(BaseModel):
     events: dict[str, list[list[str]]] = Field(default_factory=dict)  # per-frame event lists
     tileset: GodotTileSetExport | None = None
     animation_player: AnimationPlayerExport | None = None
+    #: animation name -> procedural shader spec. Reserved for future use: the
+    #: plugin does not build shader materials yet — it surfaces this payload as
+    #: metadata on the generated meta resource so game code can read it, and a
+    #: later round may construct `ShaderMaterial` tracks from it. Today it is
+    #: informational; frames are still baked, never shader-driven.
     procedural: dict[str, ProceduralAnimationSpec] = Field(default_factory=dict)
     import_settings: GodotImportSettings = Field(default_factory=GodotImportSettings)

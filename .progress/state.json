@@ -1,0 +1,26 @@
+{
+  "score": 9.0,
+  "waves": 3,
+  "builders": 29,
+  "critics": 19,
+  "loops": 12,
+  "pieces": [
+    {"id":"P1","name":"Render polish (shading / outlines / AO / light)","status":"done","rounds":4,"verdict":"PASS 7/10 + per-region form shading","gap":""},
+    {"id":"P2","name":"Palette ramps &amp; color discipline","status":"done","rounds":3,"verdict":"PASS 9/10","gap":""},
+    {"id":"P3","name":"Shape DSL richness (polygon, arc, curves)","status":"done","rounds":2,"verdict":"PASS 9/10","gap":""},
+    {"id":"P4","name":"Animation quality (walk cycles, timing)","status":"done","rounds":2,"verdict":"PASS 8/10 + micro-fix","gap":""},
+    {"id":"P5","name":"Tileset / terrain quality","status":"done","rounds":5,"verdict":"PASS 8/10 + Chebyshev-2 bump","gap":""},
+    {"id":"P6","name":"Godot exporter fidelity","status":"done","rounds":2,"verdict":"PASS 9/10","gap":""},
+    {"id":"W3-A","name":"Quality scoring + repair feedback (Phase 1)","status":"done","rounds":2,"verdict":"PASS 9/10 — tone-step/field-dominant PIX019, PIX006 coords, 20/20 probes, 910 tests","gap":""},
+    {"id":"W3-B","name":"Agent editing operations (Phase 2)","status":"run","rounds":1,"verdict":"R1 FAIL 7/10 (repair_outline ring stays open; swap_palette recolors protected). ALL 4 fixes landed + verified by orchestrator (ring closes, keys pruned, protected swap frozen, placement sanity, protected pose excluded). → R2 critic running","gap":""},
+    {"id":"W3-C","name":"Component + cluster library (Phase 3)","status":"wait","rounds":0,"verdict":"planned (4 starter components; expansion next)","gap":""},
+    {"id":"W3-D","name":"Semantic DSL + style packs (Phase 4)","status":"wait","rounds":0,"verdict":"planned","gap":""},
+    {"id":"W3-E","name":"Seeded variation + candidates (Phase 5)","status":"wait","rounds":0,"verdict":"planned","gap":""},
+    {"id":"W3-F","name":"Visual feedback tools (Phase 6)","status":"wait","rounds":0,"verdict":"planned","gap":""}
+  ],
+  "log": [
+    ["08-06 18:59","bad","W3-B R1 CRITIC: FAIL 7/10 — repair_outline ring STILL OPEN in its own fixture ('ooo/oxx/ooo'->'ooo/oox/ooo'); swap_palette recolors protected shield (black->stone_shadow); helmet chest-level; change_pose ignores protection."],
+    ["08-06 19:21","ok","W3-B FIXES: two-pass ring-path repair (transparent + fill cells, >=2 outline neighbours, key pruning), swap_palette protection frozen, add_component placement sanity + helmet at head level, change_pose protected exclusion. Orchestrator closed the tail: key-prune test expectation + transparent-hole fixture + palette_limit=32 for the component+swap recipe + 3 ruff SIM101s. Full pytest/mypy/ruff/goldens green, build-all 22 findings."],
+    ["08-06 19:26","info","W3-B R2 critic dispatched (re-runs ring-closure, protected-swap, protected-pose, placement probes)."]
+  ]
+}

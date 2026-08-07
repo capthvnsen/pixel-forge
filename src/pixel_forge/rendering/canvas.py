@@ -6,6 +6,8 @@ Alpha is always strictly 0 or 255.
 
 from __future__ import annotations
 
+import math
+from itertools import pairwise
 from pathlib import Path
 
 import numpy as np
@@ -131,6 +133,294 @@ class Canvas:
         ys, xs = np.nonzero(target)
         for yy, xx in zip(ys.tolist(), xs.tolist(), strict=True):
             self.set_pixel(x0 + xx, y0 + yy, rgba)
+
+    def draw_polygon(self, points: list[Vec2], rgba: RGBA, fill: bool = True) -> None:
+        """Draw a closed polygon through `points` (>= 3 vertices, listed in order).
+
+        `fill=True` rasterises the interior with the even-odd rule via scanline crossings at
+        each pixel centre; `fill=False` draws only the outline (Bresenham edges, closed back
+        to the first vertex). Degenerate inputs (< 3 points) draw nothing.
+        """
+        if len(points) < 3:
+            return
+        if fill:
+            self._fill_polygon(points, rgba)
+        else:
+            for i in range(len(points)):
+                self.draw_line(points[i], points[(i + 1) % len(points)], rgba)
+
+    def _fill_polygon(self, points: list[Vec2], rgba: RGBA) -> None:
+        """Even-odd scanline fill plus the closed outline.
+
+        The scanline pass rasterises interior pixels on the lattice rows (pixels are lattice
+        points at integer coordinates, the same convention as every other primitive here):
+        for every scanline the polygon is intersected with the horizontal line y (not
+        y + 0.5), crossings are sorted, and the pixels strictly between each pair are
+        filled. Edges are half-open on y (`min <= y < max`) so a vertex shared by two edges
+        is counted by exactly one of them, and horizontal edges contribute nothing. Because
+        the crossing pairs of a symmetric polygon mirror exactly, the interior is symmetric.
+
+        The outline pass then post-fills the closed Bresenham boundary (identical to
+        `fill=False`), so `fill=True` agrees with `fill=False` at every vertex and edge
+        pixel: mirrored polygons render identical silhouettes, and no vertex is chopped.
+        """
+        ys = [p[1] for p in points]
+        n = len(points)
+        for y in range(min(ys), max(ys) + 1):
+            crossings: list[float] = []
+            for i in range(n):
+                x0, y0 = points[i]
+                x1, y1 = points[(i + 1) % n]
+                if y0 == y1 or not (min(y0, y1) <= y < max(y0, y1)):
+                    continue
+                t = (y - y0) / (y1 - y0)
+                crossings.append(x0 + t * (x1 - x0))
+            crossings.sort()
+            for i in range(0, len(crossings) - 1, 2):
+                x_start = math.floor(crossings[i]) + 1  # strictly inside the pair
+                x_end = math.ceil(crossings[i + 1]) - 1
+                for x in range(x_start, x_end + 1):
+                    self.set_pixel(x, y, rgba)
+        for i in range(n):
+            self.draw_line(points[i], points[(i + 1) % n], rgba)
+
+    def draw_polyline(self, points: list[Vec2], rgba: RGBA, thickness: int = 1) -> None:
+        """Draw chained line segments through `points` (>= 1).
+
+        `thickness` (px) renders every segment as the Euclidean distance band of half-width
+        `thickness / 2` centred on the mathematical line, so the stroke has uniform width on
+        every slope and is symmetric about the line. Thickness 1 is exactly `draw_line`
+        (Bresenham, 1 px wide). A single point renders as a centred dot (disc of radius
+        `thickness / 2`).
+        """
+        if not points or thickness < 1:
+            return
+        if thickness == 1:
+            if len(points) == 1:
+                self.set_pixel(*points[0], rgba)
+                return
+            for a, b in pairwise(points):
+                self.draw_line(a, b, rgba)
+            return
+        if len(points) == 1:
+            self._stamp_dot(*points[0], rgba, thickness)
+            return
+        for a, b in pairwise(points):
+            self._draw_thick_line(a, b, rgba, thickness)
+
+    def _draw_thick_line(self, a: Vec2, b: Vec2, rgba: RGBA, thickness: int) -> None:
+        """Distance-band thick line (`thickness` >= 2): every pixel whose distance to the
+        segment is <= `thickness / 2`, computed exactly with doubled-integer arithmetic.
+
+        For a pixel P and segment AB with d = (dx, dy), u = P - A, len2 = d.d:
+        - projection u.d <= 0: closest point is A, include iff 4 |u|^2 <= t^2;
+        - projection u.d >= len2: closest point is B, include iff 4 |P - B|^2 <= t^2;
+        - otherwise the foot is interior: distance = |u x d| / sqrt(len2), include iff
+          4 (u x d)^2 <= t^2 len2.
+        Only the segment's bounding box grown by `thickness // 2` on each side is tested —
+        no pixel inside the band can lie further out (proved for both odd and even t).
+        """
+        x0, y0 = a
+        x1, y1 = b
+        dx = x1 - x0
+        dy = y1 - y0
+        len2 = dx * dx + dy * dy
+        if len2 == 0:
+            self._stamp_dot(x0, y0, rgba, thickness)
+            return
+        k = thickness // 2
+        t2 = thickness * thickness
+        x_lo, x_hi = min(x0, x1), max(x0, x1)
+        y_lo, y_hi = min(y0, y1), max(y0, y1)
+        for py in range(y_lo - k, y_hi + k + 1):
+            for px in range(x_lo - k, x_hi + k + 1):
+                ux = px - x0
+                uy = py - y0
+                dot = ux * dx + uy * dy
+                if dot <= 0:
+                    if 4 * (ux * ux + uy * uy) <= t2:
+                        self.set_pixel(px, py, rgba)
+                elif dot >= len2:
+                    vx = px - x1
+                    vy = py - y1
+                    if 4 * (vx * vx + vy * vy) <= t2:
+                        self.set_pixel(px, py, rgba)
+                else:
+                    cross = ux * dy - uy * dx
+                    if 4 * cross * cross <= t2 * len2:
+                        self.set_pixel(px, py, rgba)
+
+    def _stamp_dot(self, x: int, y: int, rgba: RGBA, thickness: int) -> None:
+        """Stamp a centred dot: every pixel within `thickness / 2` of (x, y), exact integer
+        test (disc of radius `thickness / 2`). Thickness 1 is the single pixel itself."""
+        k = thickness // 2
+        t2 = thickness * thickness
+        for py in range(y - k, y + k + 1):
+            for px in range(x - k, x + k + 1):
+                ux = px - x
+                uy = py - y
+                if 4 * (ux * ux + uy * uy) <= t2:
+                    self.set_pixel(px, py, rgba)
+
+    def draw_bezier(
+        self, p0: Vec2, p1: Vec2, p2: Vec2, rgba: RGBA, thickness: int = 1
+    ) -> None:
+        """Quadratic Bezier from `p0` via `p1` to `p2`.
+
+        The sample count is fixed and integer: the even count 2 * L (L = integer Manhattan
+        length of the control polygon) forced odd, so the same shape always samples the same
+        points, no float-derived count, and the curve midpoint t = 1/2 is always sampled
+        exactly (important for symmetric curves whose apex sits at the midpoint). Endpoints
+        p0 and p2 are always included. `thickness` behaves as in `draw_polyline`:
+        thickness 1 is drawn from the rounded samples as Bresenham segments; thickness >= 2
+        strokes the band around the unrounded samples, so the stroke follows the true curve
+        instead of the rounded polygon (rounding samples to integers would deviate by up to
+        half a pixel and occasionally widen a column by one).
+        """
+        if thickness < 1:
+            return
+        distance = (
+            abs(p1[0] - p0[0])
+            + abs(p1[1] - p0[1])
+            + abs(p2[0] - p1[0])
+            + abs(p2[1] - p1[1])
+        )
+        n = max(1, int(distance * 2)) | 1  # odd: the midpoint is always sampled
+        if n < 2:
+            self._stamp_dot(*p0, rgba, thickness)
+            return
+        if thickness == 1:
+            sampled: list[Vec2] = []
+            for i in range(n):
+                t = i / (n - 1)
+                mt = 1.0 - t
+                x = round(mt * mt * p0[0] + 2.0 * mt * t * p1[0] + t * t * p2[0])
+                y = round(mt * mt * p0[1] + 2.0 * mt * t * p1[1] + t * t * p2[1])
+                sampled.append((x, y))
+            self.draw_polyline(sampled, rgba, thickness)
+            return
+        f0 = (float(p0[0]), float(p0[1]))
+        f1 = (float(p1[0]), float(p1[1]))
+        f2 = (float(p2[0]), float(p2[1]))
+        prev: tuple[float, float] = f0
+        for i in range(1, n):
+            t = i / (n - 1)
+            mt = 1.0 - t
+            fx: float = mt * mt * f0[0] + 2.0 * mt * t * f1[0] + t * t * f2[0]
+            fy: float = mt * mt * f0[1] + 2.0 * mt * t * f1[1] + t * t * f2[1]
+            self._draw_thick_curve_segment(prev, (fx, fy), rgba, thickness)
+            prev = (fx, fy)
+
+    def _draw_thick_curve_segment(
+        self,
+        a: tuple[float, float],
+        b: tuple[float, float],
+        rgba: RGBA,
+        thickness: int,
+    ) -> None:
+        """Distance-band stroke over one float-endpoint segment (`thickness` >= 2).
+
+        Same inclusion test as `_draw_thick_line` (pixels within `thickness / 2` of the
+        segment) but with float endpoints, used for bezier flattening where the samples are
+        unrounded curve points. Deterministic: the arithmetic is fixed IEEE-754 float64
+        operations, and every operand is a product/sum of small integers or fractions of
+        them, so results are exactly reproducible run to run.
+        """
+        ax, ay = a
+        bx, by = b
+        dx = bx - ax
+        dy = by - ay
+        len2 = dx * dx + dy * dy
+        if len2 == 0.0:
+            return
+        k = thickness // 2
+        t2 = thickness * thickness
+        x_lo = math.floor(min(ax, bx) - k)
+        x_hi = math.ceil(max(ax, bx) + k)
+        y_lo = math.floor(min(ay, by) - k)
+        y_hi = math.ceil(max(ay, by) + k)
+        for py in range(y_lo, y_hi + 1):
+            for px in range(x_lo, x_hi + 1):
+                ux = px - ax
+                uy = py - ay
+                dot = ux * dx + uy * dy
+                if dot <= 0.0:
+                    if 4.0 * (ux * ux + uy * uy) <= t2:
+                        self.set_pixel(px, py, rgba)
+                elif dot >= len2:
+                    vx = px - bx
+                    vy = py - by
+                    if 4.0 * (vx * vx + vy * vy) <= t2:
+                        self.set_pixel(px, py, rgba)
+                else:
+                    cross = ux * dy - uy * dx
+                    if 4.0 * cross * cross <= t2 * len2:
+                        self.set_pixel(px, py, rgba)
+
+    def draw_arc(
+        self,
+        at: Vec2,
+        radius: int,
+        start_deg: float,
+        end_deg: float,
+        rgba: RGBA,
+        thickness: int = 1,
+        fill: bool = False,
+    ) -> None:
+        """Draw a circular arc centred at `at` in the `radius`-px circle.
+
+        Angles are degrees, 0 = +x, positive = clockwise in screen coords (y down);
+        `start_deg == end_deg` (mod 360) is a full circle. `fill=False` draws the annulus
+        band `thickness` px wide centred on the circle; `fill=True` draws a filled pie slice
+        from the centre out to `radius`. Inclusion tests use doubled integer coordinates so
+        the result is exactly symmetric and needs no float comparisons against pixel edges.
+        """
+        cx, cy = at
+        if radius < 0 or thickness < 1:
+            return
+        sweep = (end_deg - start_deg) % 360.0
+        full = sweep == 0.0
+        r_ext = radius + thickness
+        if full:
+            x0, x1 = cx - r_ext, cx + r_ext
+            y0, y1 = cy - r_ext, cy + r_ext
+        else:
+            # Extremal arc points: both endpoints plus any axis angle inside the sweep.
+            candidates = [start_deg, end_deg]
+            for axis in (0.0, 90.0, 180.0, 270.0):
+                if (axis - start_deg) % 360.0 <= sweep:
+                    candidates.append(axis)
+            xs: list[float] = []
+            ys: list[float] = []
+            for deg in candidates:
+                rad = math.radians(deg)
+                xs.append(cx + radius * math.cos(rad))
+                ys.append(cy + radius * math.sin(rad))
+            x0 = math.floor(min(xs)) - thickness
+            x1 = math.ceil(max(xs)) + thickness
+            y0 = math.floor(min(ys)) - thickness
+            y1 = math.ceil(max(ys)) + thickness
+            if fill:  # a pie slice reaches the centre
+                x0, x1 = min(x0, cx), max(x1, cx)
+                y0, y1 = min(y0, cy), max(y1, cy)
+        radius2 = (2 * radius) ** 2
+        inner2 = max(2 * radius - thickness, 0) ** 2
+        outer2 = (2 * radius + thickness) ** 2
+        for py in range(y0, y1 + 1):
+            for px in range(x0, x1 + 1):
+                qx = 2 * (px - cx)
+                qy = 2 * (py - cy)
+                d2 = qx * qx + qy * qy
+                if fill:
+                    if d2 > radius2:
+                        continue
+                elif not (inner2 <= d2 <= outer2):
+                    continue
+                if not full:
+                    ang = math.degrees(math.atan2(qy, qx)) % 360.0
+                    if (ang - start_deg) % 360.0 > sweep:
+                        continue
+                self.set_pixel(px, py, rgba)
 
     def blit(self, other: Canvas, offset: Vec2) -> None:
         """Source-over with binary alpha: destination is replaced where source alpha is 255,

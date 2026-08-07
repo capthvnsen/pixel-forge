@@ -381,7 +381,7 @@ def test_draw_shape_ellipse_with_origin() -> None:
 
 def test_draw_shape_unknown_op_raises() -> None:
     c = Canvas(2, 2)
-    shape = FakeShape(op="polygon")
+    shape = FakeShape(op="spline")  # "polygon" used to be unknown; it is a real op now
     with pytest.raises(RenderError):
         draw_shape(c, shape, origin=(0, 0), rgba=RED)
     with pytest.raises(RenderError):

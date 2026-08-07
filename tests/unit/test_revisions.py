@@ -565,9 +565,10 @@ def test_unknown_frame_index_raises():
 # --- registry helpers -------------------------------------------------------------------
 
 
-def test_available_operations_lists_all_eight():
+def test_available_operations_lists_all_registered():
     names = {info.name for info in available_operations()}
     assert names == {
+        # Core low-level revisions.
         "resize_region",
         "translate_region",
         "recolor_region",
@@ -576,6 +577,13 @@ def test_available_operations_lists_all_eight():
         "remove_frame",
         "set_region_visibility",
         "replace_spec",
+        # W3-B semantic agent-facing operations.
+        "swap_palette",
+        "apply_material",
+        "add_component",
+        "replace_component",
+        "change_pose",
+        "repair_outline",
     }
 
 

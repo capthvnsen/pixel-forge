@@ -1,0 +1,20 @@
+id: sword_basic
+description: A basic iron sword with a wooden grip, held upright.
+anchor: "@attach"
+regions:
+  sword_blade:
+    anchor: "@attach"
+    layer: 15
+    shapes:
+      - {op: rect, color: metal_light, at: [-1, -12], size: [2, 10]}
+      - {op: rect, color: metal_mid, at: [0, -12], size: [1, 10]}
+      - {op: pixel, color: metal_shadow, at: [-1, -12]}
+      - {op: pixel, color: metal_shadow, at: [-1, -4]}
+  sword_guard:
+    anchor: "@attach"
+    layer: 16
+    shapes:
+      - {op: rect, color: accent_gold, at: [-3, -2], size: [6, 1]}
+      - {op: rect, color: wood_mid, at: [-1, -1], size: [2, 4]}
+      - {op: rect, color: wood_light, at: [-1, -1], size: [1, 4]}
+      - {op: rect, color: wood_shadow, at: [-1, 3], size: [2, 1]}

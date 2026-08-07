@@ -19,6 +19,11 @@ class PaletteColor(BaseModel):
     hex: str = Field(pattern=_HEX_RE.pattern)
     role: str | None = None
     ramp: str | None = None
+    # How many tonal steps an auto-ramp should generate from this colour's hex
+    # (the hex is the mid step) when the palette opts into `auto_ramp`. 1 keeps
+    # the colour flat; generated ramp steps carry ramp_steps=1 so re-expansion
+    # is a no-op. Default 3 = shadow/mid/highlight, the professional minimum.
+    ramp_steps: int = Field(default=3, ge=1, le=7)
 
 
 class Palette(BaseModel):
@@ -26,6 +31,12 @@ class Palette(BaseModel):
 
     id: str
     colors: list[PaletteColor] = Field(default_factory=list)
+    # Opt-in colour discipline: when true, each colour expands to `ramp_steps`
+    # tones (shadow..highlight) via domain.palette.expand_palette, and a
+    # hue-tinted charcoal `outline` colour is derived from the palette's darkest
+    # colour. Both default false so existing specs parse and resolve unchanged.
+    auto_ramp: bool = False
+    derive_outline: bool = False
 
     @model_validator(mode="after")
     def _check_unique_ids(self) -> Palette:

@@ -1,0 +1,14 @@
+id: backpack_simple
+description: A simple cloth backpack for adventurers, worn on the back.
+anchor: "@attach"
+regions:
+  backpack:
+    anchor: "@attach"
+    layer: 10
+    shapes:
+      - {op: rect, color: leather_shadow, at: [-6, -4], size: [12, 9]}
+      - {op: rect, color: leather_mid, at: [-5, -3], size: [10, 7]}
+      - {op: rect, color: leather_light, at: [-5, -3], size: [10, 2]}
+      - {op: rect, color: leather_shadow, at: [-5, 2], size: [10, 1]}
+      - {op: line, color: outline, start: [-5, 0], end: [4, 0]}
+      - {op: rect, color: accent_gold, at: [-1, 0], size: [2, 1]}

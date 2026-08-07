@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import math
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -12,6 +14,7 @@ from pixel_forge.animation.resolver import resolve_frames
 from pixel_forge.errors import ExportError
 from pixel_forge.exporters.godot import (
     build_animation_player,
+    build_animation_player_export,
     build_godot_manifest,
     build_sprite_frames,
     build_tileset,
@@ -147,6 +150,96 @@ def test_derive_fps_rejects_empty_or_non_positive() -> None:
         derive_fps([100, 0])
 
 
+# --- fps parity with the GDScript plugin ------------------------------------------------
+#
+# importer.gd::_derive_fps must produce the same number as derive_fps for every manifest
+# the exporter can emit: the plugin deliberately replicates the formula rather than
+# reading a computed `fps` from the manifest (see the integration note atop
+# spriteframes.py). This is the bit-for-bit parity pin -- GDScript floats are IEEE-754
+# doubles, identical to Python floats, so `minf(1000.0 / float(gcd), max_fps)` must equal
+# `min(1000.0 / gcd, max_fps)` exactly. Duration sets below are the real ones from the
+# shipped examples (crawler idle, beacon active, engineer attack, sporeling death, ...)
+# plus the golden-fixture durations and the cap/edge cases derive_fps itself tests.
+
+
+def _gdscript_derive_fps(durations: Sequence[int], max_fps: float = 60.0) -> float:
+    """Bit-for-bit port of `importer.gd::_derive_fps` (durations from JSON parse as
+    floats in GDScript, hence the explicit `int()` casts mirroring the plugin)."""
+    if not durations:
+        return max_fps
+    gcd_ms = int(durations[0])
+    for d in durations:
+        gcd_ms = math.gcd(gcd_ms, int(d))
+    if gcd_ms <= 0:
+        return max_fps
+    return min(1000.0 / gcd_ms, max_fps)
+
+
+_EXAMPLE_DURATION_SETS: list[list[int]] = [
+    [150, 150],  # crawler idle (the canonical 2-frame 150ms idle)
+    [100, 100, 100, 100, 100, 100],  # beacon active
+    [400, 400, 400, 400],  # beacon idle
+    [90, 90, 90, 90],  # crawler attack / move
+    [200, 200],  # crawler telegraph
+    [120, 90, 120, 140],  # engineer attack (gcd 10 -> capped at 60)
+    [160, 160, 160, 160],  # engineer idle
+    [260, 260, 260, 260],  # rune_chest idle
+    [90, 90, 90, 220],  # rune_chest opening
+    [90, 90, 120],  # sporeling attack
+    [100, 120, 140, 200],  # sporeling death
+    [80, 120],  # sporeling impact
+    [200, 200, 200, 200],  # sporeling / vanguard idle
+    [140, 140, 160],  # sporeling telegraph
+    [110, 110, 110, 110],  # vanguard walk
+    [220, 220, 220, 220],  # warden idle
+    [100, 100],  # golden beacon spin fixture
+]
+
+
+@pytest.mark.parametrize("durations", _EXAMPLE_DURATION_SETS)
+def test_plugin_fps_formula_matches_derive_fps_bit_for_bit(durations: list[int]) -> None:
+    assert _gdscript_derive_fps(durations) == derive_fps(durations)
+    # And the per-frame Godot duration multipliers agree too.
+    fps = derive_fps(durations)
+    assert [d * fps / 1000.0 for d in durations] == duration_frames_for(durations, fps)
+
+
+# --- Animation.length parity with the GDScript plugin -----------------------------------
+#
+# importer.gd::_import_animation_player sets `animation.length` from the manifest's
+# `total_duration_ms` (`length = total_duration_ms / 1000`, in seconds). This pins the
+# truncation fix: for every real example duration set the total exceeds the last
+# keyframe's *start* time, which is what the plugin previously (incorrectly) used.
+
+
+def _gdscript_animation_length(total_duration_ms: int) -> float:
+    """Bit-for-bit port of the plugin's length derivation for a manifest carrying
+    `total_duration_ms` (JSON numbers parse as float in GDScript, so `float()` the
+    value before dividing)."""
+    return max(0.001, float(total_duration_ms) / 1000.0)
+
+
+@pytest.mark.parametrize(
+    ("durations", "expected_length"),
+    [
+        ([400, 400, 400, 400], 1.6),  # beacon idle: 1.6s spec (was 1.2)
+        ([100, 100, 100, 100, 100, 100], 0.6),  # beacon active (was 0.5)
+        ([90, 90, 90, 220], 0.49),  # rune_chest opening (was 0.27)
+        ([150, 150], 0.30),  # crawler idle (was 0.15)
+        ([260, 260, 260, 260], 1.04),  # rune_chest idle (colour-swap-only)
+    ],
+)
+def test_plugin_animation_length_uses_total_duration_not_last_keyframe_start(
+    durations: list[int], expected_length: float
+) -> None:
+    total_ms = sum(durations)
+    # The old, truncating behaviour the plugin no longer uses:
+    last_keyframe_start = total_ms - durations[-1]
+    assert last_keyframe_start < total_ms
+    # The fixed behaviour:
+    assert _gdscript_animation_length(total_ms) == expected_length
+
+
 # --- build_sprite_frames -----------------------------------------------------------------------
 
 
@@ -258,6 +351,52 @@ def test_animated_tile_appears_exactly_once_in_tiles() -> None:
     assert "water_2" not in tile_ids
 
 
+def test_collision_lists_resolve_animation_frames_to_base_tile() -> None:
+    """A collision/navigation/occlusion flag on a non-base animation frame must collapse
+    onto the animated tile's base frame -- the only id that is a real Godot tile. This
+    mirrors the sample_map resolution: the plugin can then stamp every listed id blindly
+    without re-deriving the animated-tile mapping."""
+    doc = parse_asset_doc(
+        {
+            "schema_version": 1,
+            "asset": {"id": "forest", "type": "terrain", "canvas": [16, 16]},
+            "palette": {"id": "p", "colors": [{"id": "grass", "hex": "#3a9b3a"}]},
+            "tiles": {
+                "grass": {"size": [8, 8], "regions": {}, "anchors": {}},
+                "water_1": {
+                    "size": [8, 8],
+                    "regions": {},
+                    "anchors": {},
+                    "collision": "solid",
+                    "occlusion": True,
+                },
+                "water_2": {
+                    "size": [8, 8],
+                    "regions": {},
+                    "anchors": {},
+                    "collision": "solid",
+                    "navigation": True,
+                    "occlusion": True,
+                },
+            },
+            "terrain_sets": {},
+            "transitions": [],
+            "animated_tiles": {
+                "water_flow": {"frames": ["water_1", "water_2"], "frame_duration_ms": 150}
+            },
+            "export": {},
+            "validation": {},
+        }
+    )
+    cells = _terrain_atlas(doc)
+    tileset = build_tileset(doc, cells, "forest/atlas.png")
+
+    # water_2's flags (collision/navigation/occlusion) land on water_1, deduped and sorted.
+    assert tileset.collision_tiles == ["water_1"]
+    assert tileset.navigation_tiles == ["water_1"]
+    assert tileset.occlusion_tiles == ["water_1"]
+
+
 def test_animated_tile_non_contiguous_frames_raise() -> None:
     doc = _terrain_doc()
     cells = dict(_terrain_atlas(doc))
@@ -324,6 +463,145 @@ def test_animation_player_skips_static_region_and_tracks_moving_one() -> None:
         (0, (0, 0)),
         (100, (1, 0)),
     ]
+
+
+def test_animation_player_two_frame_150ms_idle_track_shape() -> None:
+    """The canonical 2-frame 150ms idle: cumulative `time_ms` keyframes are the
+    frames' *start* times (0.0 / 0.15s in Godot), and the animation's true total
+    duration — 2 x 150ms = 300ms — is carried separately in the `animations`
+    entry so the plugin sets `Animation.length = 0.30` instead of truncating to
+    the last keyframe's start (0.15). The bug this pins: keyframe times alone
+    can never recover the final frame's hold."""
+    doc = parse_asset_doc(
+        {
+            "schema_version": 1,
+            "asset": {"id": "crawler", "type": "prop", "canvas": [8, 8]},
+            "palette": {"id": "p", "colors": [{"id": "c", "hex": "#ffcc00"}]},
+            "directions": ["east"],
+            "mirror": {},
+            "anchors": {"root": [0, 0]},
+            "regions": {
+                "body": {"anchor": "root", "layer": 0, "shapes": []},
+                "tail": {"anchor": "root", "layer": 1, "shapes": []},
+            },
+            "animations": {
+                "idle": {
+                    "loop": True,
+                    "frames": [
+                        {"duration_ms": 150, "transforms": {"tail": {}}},
+                        {"duration_ms": 150, "transforms": {"tail": {"offset": [1, 0]}}},
+                    ],
+                }
+            },
+            "export": {},
+            "validation": {},
+        }
+    )
+    frames = resolve_frames(doc)
+    tracks = build_animation_player(doc, frames)
+
+    assert {t.node_path for t in tracks} == {"idle/tail"}
+    track = tracks[0]
+    assert track.property == "position"
+    # Cumulative integer ms: (0, 150) -- the plugin divides by 1000 for Godot seconds.
+    assert [(kf.time_ms, kf.value) for kf in track.keyframes] == [
+        (0, (0, 0)),
+        (150, (1, 0)),
+    ]
+    # 2-element value arrays are exactly what _to_variant() turns into Vector2.
+    assert all(len(kf.value) == 2 for kf in track.keyframes)
+
+    # The true total (0.30s) comes from the animations metadata, NOT the last
+    # keyframe's start time (0.15s) -- the truncation bug this suite pins.
+    export = build_animation_player_export(doc, frames)
+    idle = export.animations["idle"]
+    assert idle.total_duration_ms == 300
+    assert idle.loop is True
+    assert {t.node_path for t in export.tracks} == {"idle/tail"}
+
+
+def test_animation_player_export_total_duration_includes_last_frame_hold() -> None:
+    """`total_duration_ms` is the exact sum of frame durations. For the 4-frame
+    90/90/90/220ms opening (the real rune_chest shape) the last keyframe starts at
+    270ms but the animation is 490ms -- asserting both pins the truncation bug."""
+    doc = parse_asset_doc(
+        {
+            "schema_version": 1,
+            "asset": {"id": "chest", "type": "prop", "canvas": [8, 8]},
+            "palette": {"id": "p", "colors": [{"id": "c", "hex": "#ffcc00"}]},
+            "directions": ["south"],
+            "mirror": {},
+            "anchors": {"root": [0, 0]},
+            "regions": {
+                "lid": {"anchor": "root", "layer": 0, "shapes": []},
+                "rune": {"anchor": "root", "layer": 1, "shapes": []},
+            },
+            "animations": {
+                "opening": {
+                    "loop": False,
+                    "frames": [
+                        {"duration_ms": 90, "transforms": {"lid": {"offset": [0, 0]}}},
+                        {"duration_ms": 90, "transforms": {"lid": {"offset": [0, -3]}}},
+                        {"duration_ms": 90, "transforms": {"lid": {"offset": [0, -6]}}},
+                        {"duration_ms": 220, "transforms": {"lid": {"offset": [0, -10]}}},
+                    ],
+                }
+            },
+            "export": {},
+            "validation": {},
+        }
+    )
+    frames = resolve_frames(doc)
+    export = build_animation_player_export(doc, frames)
+
+    opening = export.animations["opening"]
+    assert opening.total_duration_ms == 490
+    assert opening.loop is False
+    # The plugin's length math: total_duration_ms / 1000 == 0.49s.
+    assert opening.total_duration_ms / 1000.0 == 0.49
+    # The last keyframe's start time -- what the plugin used to truncate to.
+    last_keyframe_start = max(kf.time_ms for t in export.tracks for kf in t.keyframes)
+    assert last_keyframe_start == 270
+    assert last_keyframe_start < opening.total_duration_ms
+
+
+def test_animation_player_export_emits_metadata_for_color_swap_only_animation() -> None:
+    """A region driven purely by `color_swap` produces no position/visible track
+    (the exporter has no palette access and the keyframe schema can't carry a
+    Color), so the animation would previously vanish. The `animations` entry is
+    still emitted with the true total + loop, so the plugin builds a present,
+    correctly-timed, looping zero-track Animation."""
+    doc = parse_asset_doc(
+        {
+            "schema_version": 1,
+            "asset": {"id": "chest", "type": "prop", "canvas": [8, 8]},
+            "palette": {"id": "p", "colors": [{"id": "c", "hex": "#ffcc00"}]},
+            "directions": ["south"],
+            "mirror": {},
+            "anchors": {"root": [0, 0]},
+            "regions": {
+                "rune": {"anchor": "root", "layer": 0, "shapes": []},
+            },
+            "animations": {
+                "idle": {
+                    "loop": True,
+                    "frames": [
+                        {"duration_ms": 260, "transforms": {"rune": {"color_swap": {"a": "a"}}}},
+                        {"duration_ms": 260, "transforms": {"rune": {"color_swap": {"a": "b"}}}},
+                    ],
+                }
+            },
+            "export": {},
+            "validation": {},
+        }
+    )
+    frames = resolve_frames(doc)
+    export = build_animation_player_export(doc, frames)
+
+    assert export.tracks == []  # no position/visible change -> no keyframe track
+    assert set(export.animations) == {"idle"}
+    assert export.animations["idle"].total_duration_ms == 520
+    assert export.animations["idle"].loop is True
 
 
 # --- procedural passthrough ----------------------------------------------------------------------

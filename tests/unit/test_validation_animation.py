@@ -20,6 +20,7 @@ def _doc(
     regions: dict[str, Any] | None = None,
     animations: dict[str, Any] | None = None,
     validation: dict[str, Any] | None = None,
+    palette_colors: list[dict[str, Any]] | None = None,
 ) -> CharacterAsset:
     if directions is None:
         directions = ["south"]
@@ -31,6 +32,8 @@ def _doc(
         animations = {
             "idle": {"loop": True, "frames": [{"duration_ms": 100, "events": [], "transforms": {}}]}
         }
+    if palette_colors is None:
+        palette_colors = [{"id": "red", "hex": "#ff0000"}]
     data = {
         "schema_version": 1,
         "asset": {
@@ -39,7 +42,7 @@ def _doc(
             "canvas": list(canvas),
             "baseline_y": baseline_y,
         },
-        "palette": {"id": "p", "colors": [{"id": "red", "hex": "#ff0000"}]},
+        "palette": {"id": "p", "colors": palette_colors},
         "directions": directions,
         "mirror": {},
         "anchors": anchors,
@@ -495,4 +498,176 @@ def test_ani009_does_not_fire_when_directions_agree() -> None:
     doc = _doc()
     ctx = _ctx(doc, {}, resolved=_ani009_resolved(south_frame_count=2))
     report = run_validation(ctx, only=["ANI009"])
+    assert report.findings == []
+
+
+# ---- ANI010: inconsistent outline thickness ----------------------------------
+
+
+def _outline_anim_doc(frame_count: int = 2) -> CharacterAsset:
+    return _doc(
+        canvas=(12, 12),
+        palette_colors=[
+            {"id": "red", "hex": "#ff0000"},
+            {"id": "ink", "hex": "#222222", "role": "outline"},
+        ],
+        animations={
+            "idle": {
+                "loop": True,
+                "frames": [
+                    {"duration_ms": 100, "events": [], "transforms": {}}
+                    for _ in range(frame_count)
+                ],
+            }
+        },
+    )
+
+
+def _rect_outline_12(thickness: int) -> Canvas:
+    """12x12 rect at (0,0): `thickness`-px ink outline ring, red interior."""
+    c = Canvas(12, 12)
+    for x in range(12):
+        for y in range(12):
+            on_boundary = x in (0, 11) or y in (0, 11)
+            if thickness == 1:
+                c.set_pixel(x, y, INK if on_boundary else RED)
+            else:
+                near_boundary = x < 3 or x > 8 or y < 3 or y > 8
+                c.set_pixel(x, y, INK if near_boundary else RED)
+    return c
+
+
+INK: RGBA = (34, 34, 34, 255)
+
+
+def test_ani010_fires_on_outline_thickness_variation() -> None:
+    doc = _outline_anim_doc()
+    frame0 = _rect_outline_12(1)  # 1px outline
+    frame1 = _rect_outline_12(3)  # 3px outline
+    ctx = _ctx(doc, {("idle", "south", 0): frame0, ("idle", "south", 1): frame1})
+    report = run_validation(ctx, only=["ANI010"])
+    assert len(report.findings) == 1
+    finding = report.findings[0]
+    assert finding.rule_id == "ANI010"
+    assert finding.severity == "warning"
+    assert finding.kind == "heuristic"
+    assert finding.measurements["min_thickness_px"] == 1
+    assert finding.measurements["max_thickness_px"] == 3
+    assert finding.measurements["coords"]  # edge pixels of the thinnest frame
+
+
+def test_ani010_does_not_fire_when_outline_thickness_constant() -> None:
+    doc = _outline_anim_doc()
+    frame0 = _rect_outline_12(1)
+    frame1 = _rect_outline_12(1)
+    ctx = _ctx(doc, {("idle", "south", 0): frame0, ("idle", "south", 1): frame1})
+    report = run_validation(ctx, only=["ANI010"])
+    assert report.findings == []
+
+
+def test_ani010_skips_when_no_outline_colour_declared() -> None:
+    doc = _doc(canvas=(12, 12))  # red-only palette
+    frame0 = _rect_outline_12(1)
+    frame1 = _rect_outline_12(3)
+    ctx = _ctx(doc, {("idle", "south", 0): frame0, ("idle", "south", 1): frame1})
+    report = run_validation(ctx, only=["ANI010"])
+    assert report.findings == []
+
+
+# ---- ANI011: animation jitter -------------------------------------------------
+
+
+def _jitter_doc(offsets: list[list[int]], durations: list[int] | None = None) -> CharacterAsset:
+    if durations is None:
+        durations = [100] * len(offsets)
+    frames = [
+        {"duration_ms": ms, "events": [], "transforms": {"arm": {"offset": off}}}
+        for off, ms in zip(offsets, durations, strict=True)
+    ]
+    return _doc(
+        anchors={"root": [0, 0]},
+        regions={"arm": {"anchor": "root", "layer": 0, "shapes": []}},
+        animations={"idle": {"loop": True, "frames": frames}},
+    )
+
+
+def test_ani011_fires_on_jump_out_and_back() -> None:
+    doc = _jitter_doc(offsets=[[0, 0], [4, 0], [0, 0]])
+    ctx = _ctx(doc, {})
+    report = run_validation(ctx, only=["ANI011"])
+    assert len(report.findings) == 1
+    finding = report.findings[0]
+    assert finding.rule_id == "ANI011"
+    assert finding.severity == "warning"
+    assert finding.frame == 1
+    assert finding.region == "arm"
+    assert finding.measurements["coords"] == [[0, 0], [4, 0], [0, 0]]
+
+
+def test_ani011_does_not_fire_on_smooth_small_steps() -> None:
+    doc = _jitter_doc(offsets=[[0, 0], [1, 0], [2, 0]])
+    ctx = _ctx(doc, {})
+    report = run_validation(ctx, only=["ANI011"])
+    assert report.findings == []
+
+
+def test_ani011_does_not_fire_on_slow_animations() -> None:
+    doc = _jitter_doc(offsets=[[0, 0], [4, 0], [0, 0]], durations=[200, 200, 200])
+    ctx = _ctx(doc, {})
+    report = run_validation(ctx, only=["ANI011"])
+    assert report.findings == []
+
+
+def test_ani011_does_not_fire_on_two_frame_animation() -> None:
+    doc = _jitter_doc(offsets=[[0, 0], [4, 0]])
+    ctx = _ctx(doc, {})
+    report = run_validation(ctx, only=["ANI011"])
+    assert report.findings == []
+
+
+# ---- ANI012: shifting body volume ---------------------------------------------
+
+
+def _volume_doc(loop: bool, counts: list[int]) -> CharacterAsset:
+    frames = [
+        {"duration_ms": 100, "events": [], "transforms": {}} for _ in counts
+    ]
+    return _doc(
+        canvas=(10, 10),
+        animations={"idle": {"loop": loop, "frames": frames}},
+    )
+
+
+def test_ani012_fires_on_large_volume_swing_in_loop() -> None:
+    doc = _volume_doc(loop=True, counts=[20, 30])
+    frame0 = _canvas_with_n_opaque(10, 10, 20)
+    frame1 = _canvas_with_n_opaque(10, 10, 30)
+    ctx = _ctx(doc, {("idle", "south", 0): frame0, ("idle", "south", 1): frame1})
+    report = run_validation(ctx, only=["ANI012"])
+    assert len(report.findings) == 1
+    finding = report.findings[0]
+    assert finding.rule_id == "ANI012"
+    assert finding.severity == "warning"
+    assert finding.kind == "deterministic"
+    assert finding.frame == 1
+    assert finding.measurements["previous_count"] == 20
+    assert finding.measurements["current_count"] == 30
+    assert finding.measurements["coords"]  # pixels that appeared between frames
+
+
+def test_ani012_does_not_fire_on_small_volume_change() -> None:
+    doc = _volume_doc(loop=True, counts=[20, 21])
+    frame0 = _canvas_with_n_opaque(10, 10, 20)
+    frame1 = _canvas_with_n_opaque(10, 10, 21)
+    ctx = _ctx(doc, {("idle", "south", 0): frame0, ("idle", "south", 1): frame1})
+    report = run_validation(ctx, only=["ANI012"])
+    assert report.findings == []
+
+
+def test_ani012_does_not_fire_on_non_looping_animation() -> None:
+    doc = _volume_doc(loop=False, counts=[20, 30])
+    frame0 = _canvas_with_n_opaque(10, 10, 20)
+    frame1 = _canvas_with_n_opaque(10, 10, 30)
+    ctx = _ctx(doc, {("idle", "south", 0): frame0, ("idle", "south", 1): frame1})
+    report = run_validation(ctx, only=["ANI012"])
     assert report.findings == []

@@ -121,28 +121,46 @@ static func _load_atlas_texture(
 	if err != OK:
 		outcome.errors.append("could not load texture %s (error %d)" % [abs_path, err])
 		return null
-	_disable_mipmaps_if_imported(abs_path)
+	_apply_import_settings(abs_path, manifest)
 	return ImageTexture.create_from_image(img)
 
 
-## Best-effort only: Godot 4 has no per-texture "nearest filter" import flag (filtering
-## moved to CanvasItem.texture_filter / the project default — see docs/godot.md), but
-## "no mipmaps" is still a real texture-import parameter. If the source PNG already has
-## an editor-generated `.import` file we patch its `mipmaps/generate` flag in place. We
-## deliberately do NOT fabricate a `.import` file from scratch for a texture the editor
-## has never imported — Godot 4.3+'s import file format carries a resource `uid` that a
-## hand-rolled file can get wrong, and getting it wrong is worse than leaving the file
-## absent for the editor to generate normally on first scan. This has no bearing on the
-## correctness of the generated resources themselves, which read the PNG bytes directly
-## via `Image`/`ImageTexture`, not through the editor's cached import.
-static func _disable_mipmaps_if_imported(abs_texture_path: String) -> void:
+## Best-effort only, and only ever an in-place patch of a `.import` file the editor
+## has already generated: Godot 4 has no per-texture "nearest filter" import flag
+## (filtering moved to CanvasItem.texture_filter / the project default -- see
+## docs/godot.md), so the manifest's `import_settings` can only drive the import
+## parameters that actually exist -- `mipmaps/generate` (no mipmaps), the
+## `process/fix_alpha_border` toggle, and lossless `compress/mode`. The `filter`
+## field is read here (never silently ignored) but has nothing to patch: 'nearest'
+## is honoured at the project level (`rendering/textures/canvas_textures/
+## default_texture_filter=0` in the sample project) and per-node where this
+## importer constructs CanvasItems (sample-map layers get
+## `TEXTURE_FILTER_NEAREST`). We deliberately do NOT fabricate a `.import` file
+## from scratch for a texture the editor has never imported -- Godot 4.3+'s import
+## file format carries a resource `uid` that a hand-rolled file can get wrong, and
+## getting it wrong is worse than leaving the file absent for the editor to
+## generate normally on first scan. This has no bearing on the correctness of the
+## generated resources themselves, which read the PNG bytes directly via
+## `Image`/`ImageTexture`, not through the editor's cached import.
+static func _apply_import_settings(abs_texture_path: String, manifest: Dictionary) -> void:
 	var import_path := abs_texture_path + ".import"
 	if not FileAccess.file_exists(import_path):
 		return
 	var cfg := ConfigFile.new()
 	if cfg.load(import_path) != OK:
 		return
-	cfg.set_value("params", "mipmaps/generate", false)
+	var settings: Dictionary = manifest.get("import_settings", {})
+	# Consumed for documentation/guarding: the schema only allows "nearest", which
+	# Godot 4 honours via project setting + CanvasItem.texture_filter, not via the
+	# import file. A future schema widening past "nearest" would need per-node
+	# TEXTURE_FILTER_* handling in the generated scenes instead.
+	var filter_mode: String = str(settings.get("filter", "nearest"))
+	if filter_mode != "nearest":
+		return
+	cfg.set_value("params", "mipmaps/generate", bool(settings.get("mipmaps", false)))
+	cfg.set_value("params", "process/fix_alpha_border", bool(settings.get("fix_alpha_border", false)))
+	if str(settings.get("compress_mode", "lossless")) == "lossless":
+		cfg.set_value("params", "compress/mode", 0)
 	cfg.save(import_path)
 
 
@@ -175,6 +193,10 @@ static func _write_meta_resource(
 		meta.set_meta("baseline_y", baseline_y)
 	meta.set_meta("pivots", manifest.get("pivots", {}))
 	meta.set_meta("events", manifest.get("events", {}))
+	# Procedural shader specs are reserved for future shader-material construction;
+	# surfacing them as meta is their one consumption today (game code can read
+	# them without the plugin building any shader).
+	meta.set_meta("procedural", manifest.get("procedural", {}))
 
 	var path := "%s/%s_meta.tres" % [out_dir, asset_id]
 	var err := ResourceSaver.save(meta, path)
@@ -281,6 +303,16 @@ static func _import_sprite_frames(
 ## `node_path` is `"<animation>/<region>"` or `"<animation>/<direction>/<region>"`; the
 ## first segment selects which `Animation` resource the track belongs to, the rest is
 ## the track's own NodePath within that animation.
+##
+## The manifest's `animation_player.animations` dict is the authoritative list of
+## `Animation` resources to build: each entry carries `total_duration_ms` (the exact
+## sum of the animation's frame durations, so `Animation.length` includes the last
+## frame's hold — keyframe `time_ms` values are cumulative *start* times and would
+## truncate it) and `loop`. An animation with zero keyframe tracks (colour-swap-only
+## or fully static regions) still gets a resource with the correct length and loop
+## mode, plus a warning — without this it would silently vanish. Manifests without
+## the `animations` dict (pre-duration-fix) fall back to grouping tracks and to the
+## last keyframe time, preserving the old behaviour.
 static func _import_animation_player(
 	manifest: Dictionary, asset_id: String, out_dir: String, spec_hash: String, outcome: Outcome
 ) -> void:
@@ -288,10 +320,8 @@ static func _import_animation_player(
 	if typeof(ap_data) != TYPE_DICTIONARY:
 		outcome.warnings.append("%s: animation_player is absent, nothing to import" % asset_id)
 		return
+	var animations_data = ap_data.get("animations", {})
 	var tracks = ap_data.get("tracks", [])
-	if tracks.is_empty():
-		outcome.warnings.append("%s: animation_player.tracks is empty, nothing to import" % asset_id)
-		return
 
 	var grouped: Dictionary = {}  # animation name -> Array[Dictionary]
 	for track in tracks:
@@ -318,15 +348,32 @@ static func _import_animation_player(
 			}
 		)
 
+	# Authoritative animation list from the manifest when present; otherwise fall
+	# back to the animations that produced tracks (pre-duration-fix manifests).
+	var anim_names: Array = []
+	if typeof(animations_data) == TYPE_DICTIONARY and not animations_data.is_empty():
+		anim_names = animations_data.keys()
+	else:
+		anim_names = grouped.keys()
+
 	var sprite_frames_data = manifest.get("sprite_frames", {})
 
-	for anim_name in grouped.keys():
+	for anim_name in anim_names:
 		var animation := Animation.new()
-		var loop := _loop_for_animation(sprite_frames_data, anim_name)
+		var anim_meta: Dictionary = {}
+		if typeof(animations_data) == TYPE_DICTIONARY and animations_data.has(anim_name):
+			anim_meta = animations_data[anim_name]
+		var loop := bool(anim_meta.get("loop", _loop_for_animation(sprite_frames_data, anim_name)))
 		animation.loop_mode = Animation.LOOP_LINEAR if loop else Animation.LOOP_NONE
 
+		# True end-to-end length: total_duration_ms from the manifest when present
+		# (JSON numbers parse as float in GDScript). Fallback for pre-fix manifests:
+		# the last keyframe's start time (the old, truncating behaviour).
 		var length_sec := 0.001
-		for t in grouped[anim_name]:
+		var total_ms: Variant = anim_meta.get("total_duration_ms", -1)
+		if typeof(total_ms) in [TYPE_INT, TYPE_FLOAT] and float(total_ms) > 0:
+			length_sec = maxf(length_sec, float(total_ms) / 1000.0)
+		for t in grouped.get(anim_name, []):
 			var track_idx := animation.add_track(Animation.TYPE_VALUE)
 			animation.track_set_path(track_idx, NodePath("%s:%s" % [t["sub_path"], t["property"]]))
 			for kf in t["keyframes"]:
@@ -334,6 +381,16 @@ static func _import_animation_player(
 				length_sec = maxf(length_sec, time_sec)
 				animation.track_insert_key(track_idx, time_sec, _to_variant(kf.get("value")))
 		animation.length = length_sec
+
+		if not grouped.has(anim_name):
+			outcome.warnings.append(
+				(
+					"%s: animation '%s' has no keyframe tracks (colour-swap-only or "
+					+ "static pose); emitting a zero-track Animation of length %.3fs so "
+					+ "it exists and loops"
+				)
+				% [asset_id, anim_name, length_sec]
+			)
 
 		animation.set_meta("asset_id", asset_id)
 		animation.set_meta("spec_hash", spec_hash)
@@ -398,6 +455,7 @@ static func _import_tileset(
 
 	_apply_terrain_sets(ts_data, tile_set, atlas_source, coord_by_id, asset_id, outcome)
 	_apply_animated_tiles(ts_data, atlas_source, asset_id, outcome)
+	_apply_tile_physics(ts_data, tile_set, atlas_source, coord_by_id, asset_id, outcome)
 
 	tile_set.set_meta("asset_id", asset_id)
 	tile_set.set_meta("spec_hash", spec_hash)
@@ -475,6 +533,87 @@ static func _apply_terrain_sets(
 				var to_terrain: String = terrain_bits_data[tile_id][peering_name]
 				if terrain_idx.has(to_terrain):
 					tile_data.set_terrain_peering_bit(_PEERING_BIT_ENUM[peering_name], terrain_idx[to_terrain])
+
+
+## Applies the manifest's per-tile physics metadata -- `collision_tiles`,
+## `navigation_tiles`, `occlusion_tiles` -- by creating one TileSet layer per
+## feature (physics / navigation / occlusion) and stamping every listed tile with a
+## full-tile rectangle shape. The exporter pre-resolves every id to a base tile
+## (an animated tile's non-base frames collapse onto their base frame, the only
+## coordinate Godot registers as a real tile), so a listed id either exists in
+## `coord_by_id` or is a manifest bug worth a warning, never a silent skip of the
+## whole feature. A full-tile rect is the one shape derivable from the manifest
+## alone; per-tile polygon art is not part of the schema.
+static func _apply_tile_physics(
+	ts_data: Dictionary,
+	tile_set: TileSet,
+	atlas_source: TileSetAtlasSource,
+	coord_by_id: Dictionary,
+	asset_id: String,
+	outcome: Outcome,
+) -> void:
+	var collision_tiles: Array = ts_data.get("collision_tiles", [])
+	var navigation_tiles: Array = ts_data.get("navigation_tiles", [])
+	var occlusion_tiles: Array = ts_data.get("occlusion_tiles", [])
+	if collision_tiles.is_empty() and navigation_tiles.is_empty() and occlusion_tiles.is_empty():
+		return
+
+	var tile_size: Vector2i = tile_set.tile_size
+	var tile_rect := PackedVector2Array(
+		[
+			Vector2(0, 0),
+			Vector2(tile_size.x, 0),
+			Vector2(tile_size.x, tile_size.y),
+			Vector2(0, tile_size.y),
+		]
+	)
+
+	if not collision_tiles.is_empty():
+		tile_set.add_physics_layer()
+		var physics_layer: int = tile_set.get_physics_layers_count() - 1
+		for tile_id in collision_tiles:
+			var coords = coord_by_id.get(str(tile_id))
+			if coords == null:
+				outcome.warnings.append(
+					"%s: collision_tiles references unknown tile_id '%s'" % [asset_id, tile_id]
+				)
+				continue
+			var tile_data: TileData = atlas_source.get_tile_data(coords, 0)
+			tile_data.add_collision_polygon(physics_layer)
+			var poly_idx: int = tile_data.get_collision_polygons_count(physics_layer) - 1
+			tile_data.set_collision_polygon_points(physics_layer, poly_idx, tile_rect)
+
+	if not navigation_tiles.is_empty():
+		tile_set.add_navigation_layer()
+		var navigation_layer: int = tile_set.get_navigation_layers_count() - 1
+		var nav_poly := NavigationPolygon.new()
+		nav_poly.set_vertices(tile_rect)
+		nav_poly.add_polygon(PackedInt32Array([0, 1, 2, 3]))
+		for tile_id in navigation_tiles:
+			var coords = coord_by_id.get(str(tile_id))
+			if coords == null:
+				outcome.warnings.append(
+					"%s: navigation_tiles references unknown tile_id '%s'" % [asset_id, tile_id]
+				)
+				continue
+			var tile_data: TileData = atlas_source.get_tile_data(coords, 0)
+			tile_data.set_navigation_polygon(navigation_layer, nav_poly)
+
+	if not occlusion_tiles.is_empty():
+		tile_set.add_occlusion_layer()
+		var occlusion_layer: int = tile_set.get_occlusion_layers_count() - 1
+		var occluder := OccluderPolygon2D.new()
+		occluder.closed = true
+		occluder.polygon = tile_rect
+		for tile_id in occlusion_tiles:
+			var coords = coord_by_id.get(str(tile_id))
+			if coords == null:
+				outcome.warnings.append(
+					"%s: occlusion_tiles references unknown tile_id '%s'" % [asset_id, tile_id]
+				)
+				continue
+			var tile_data: TileData = atlas_source.get_tile_data(coords, 0)
+			tile_data.set_occluder(occlusion_layer, occluder)
 
 
 ## Godot's `TileSetAtlasSource` animation model requires an animated tile's frames to

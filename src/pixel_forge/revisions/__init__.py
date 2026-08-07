@@ -8,6 +8,7 @@ from pixel_forge.revisions.operations import (
     apply_operation,
     available_operations,
     check_protection,
+    generate_variants,
 )
 from pixel_forge.revisions.store import (
     compare_revisions,
@@ -24,6 +25,7 @@ __all__ = [
     "available_operations",
     "check_protection",
     "compare_revisions",
+    "generate_variants",
     "head_revision",
     "load_revisions",
     "record_revision",

@@ -6,7 +6,7 @@ a GDScript editor plugin (built separately) reads it and constructs native Godot
 
 Integration note: `GodotManifest` still has no field for `fps`/`duration_frames`
 (see `spriteframes.derive_fps`) or float `time_s` keyframes (see
-`animation.build_animation_player`) — everything else the exporter needs is
+`animation.build_animation_player_export`) — everything else the exporter needs is
 now present in `schemas.manifest`.
 """
 
@@ -20,14 +20,14 @@ from pathlib import Path
 from pixel_forge.animation.resolver import ResolvedFrame
 from pixel_forge.domain.geometry import mirror_anchors
 from pixel_forge.errors import ExportError
-from pixel_forge.exporters.godot.animation import build_animation_player
+from pixel_forge.exporters.godot.animation import build_animation_player_export
 from pixel_forge.exporters.godot.spriteframes import build_sprite_frames
 from pixel_forge.exporters.godot.tileset import build_tileset
 from pixel_forge.rendering.sheet import SheetCell, SpriteSheet
 from pixel_forge.schemas.animation import ProceduralAnimationSpec
 from pixel_forge.schemas.asset import AssetDocUnion, SpriteAssetBase, TerrainAsset
 from pixel_forge.schemas.common import Vec2
-from pixel_forge.schemas.manifest import AnimationPlayerExport, GodotImportSettings, GodotManifest
+from pixel_forge.schemas.manifest import GodotImportSettings, GodotManifest
 
 _WINDOWS_DRIVE_RE = re.compile(r"^[A-Za-z]:/")
 
@@ -143,7 +143,7 @@ def build_godot_manifest(
         pivots=_pivots_for(doc),
         baseline_y=doc.asset.baseline_y,
         events=_events_for(doc),
-        animation_player=AnimationPlayerExport(tracks=build_animation_player(doc, frames)),
+        animation_player=build_animation_player_export(doc, frames),
         procedural=_procedural_for(doc),
         import_settings=GodotImportSettings(),
     )

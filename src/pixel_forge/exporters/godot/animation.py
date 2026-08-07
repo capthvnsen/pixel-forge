@@ -10,15 +10,35 @@ belongs to. `time_ms` is the exact cumulative integer sum of `duration_ms`
 (no float seconds conversion — the schema already stores ms elsewhere, so this
 stays lossless and matches the rest of the codebase's integer-duration
 convention). See the exporter task's integration-risk report for details.
+
+Duration contract: keyframe `time_ms` values are cumulative *start* times, so
+the last keyframe's time is NOT the animation's length — the final frame's hold
+is unrepresented. `build_animation_player_export` therefore also emits
+`AnimationPlayerExport.animations[<name>].total_duration_ms` (the exact sum of
+that animation's `duration_ms`), and the plugin sets `Animation.length` from it.
+Without this, a 90/90/90/220ms opening would import as 270ms and the 220ms
+"lid open" hold would never play.
+
+Colour-swap-only animations: a region driven purely by `color_swap` produces no
+position/visible track (the exporter has no palette access, and
+`AnimationKeyframe.value` cannot carry a Godot `Color`), so such an animation
+would emit zero tracks and silently vanish. It still gets an `animations` entry
+with its true total duration + loop flag, and the plugin emits a zero-track
+`Animation` resource for it (with a warning), so it exists and loops.
 """
 
 from __future__ import annotations
 
 from collections.abc import Sequence
 
-from pixel_forge.animation.resolver import ResolvedFrame
+from pixel_forge.animation.resolver import ResolvedFrame, animation_duration_ms
 from pixel_forge.schemas.asset import SpriteAssetBase
-from pixel_forge.schemas.manifest import AnimationKeyframe, AnimationPlayerTrack
+from pixel_forge.schemas.manifest import (
+    AnimationKeyframe,
+    AnimationPlayerAnimation,
+    AnimationPlayerExport,
+    AnimationPlayerTrack,
+)
 
 
 def build_animation_player(
@@ -29,7 +49,9 @@ def build_animation_player(
     whole animation is skipped, since a track of constant values is noise.
     `"position"` tracks carry the region's cumulative `offset`; `"visible"`
     tracks carry the effective visibility (`transform.visible`, defaulting to
-    `True` when unset).
+    `True` when unset). Cumulative `time_ms` values are the keyframe *start*
+    times; the animation's true total duration comes from
+    `build_animation_player_export`, never from the last keyframe's time.
     """
     grouped: dict[tuple[str, str], list[ResolvedFrame]] = {}
     directions_per_animation: dict[str, set[str]] = {}
@@ -80,3 +102,29 @@ def build_animation_player(
                 )
 
     return tracks
+
+
+def build_animation_player_export(
+    doc: SpriteAssetBase, frames: Sequence[ResolvedFrame]
+) -> AnimationPlayerExport:
+    """The full `animation_player` payload: tracks plus one `animations` entry per
+    animation carrying its true total duration and loop flag.
+
+    `total_duration_ms` uses `animation_duration_ms`, the exact integer sum of the
+    animation's frame durations — the same source as the plugin's SpriteFrames fps
+    derivation — so `Animation.length = total_duration_ms / 1000` is the real
+    end-to-end duration including the last frame's hold. Every animation in
+    `doc.animations` gets an entry, even one with zero tracks (colour-swap-only or
+    fully static), so the plugin builds a present, correctly-timed, looping
+    `Animation` resource for it instead of silently skipping it.
+    """
+    return AnimationPlayerExport(
+        tracks=build_animation_player(doc, frames),
+        animations={
+            name: AnimationPlayerAnimation(
+                total_duration_ms=animation_duration_ms(doc, name),
+                loop=animation.loop,
+            )
+            for name, animation in doc.animations.items()
+        },
+    )

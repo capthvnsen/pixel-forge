@@ -70,7 +70,9 @@ tiles:
   # --- grass -> dirt transitions: dirt tile with a grass patch encroaching
   # from the named direction. The patch always stays within [1,14] on both
   # axes (never touching the tile_edge ring), so the self-seam guarantee
-  # above holds for every one of these too.
+  # above holds for every one of these too. Every boundary steps 2+ rows/cols
+  # (blend-zone treatment) so TIL009 stays silent — the straight 6-row bands
+  # this example originally shipped tripped 8 hard-transition warnings.
   grass_dirt_n:
     size: [16, 16]
     terrain: dirt
@@ -79,7 +81,12 @@ tiles:
     regions:
       edge: { anchor: origin, layer: 0, shapes: [{ op: rect, color: tile_edge, at: [0, 0], size: [16, 16] }] }
       fill: { anchor: origin, layer: 1, shapes: [{ op: rect, color: dirt_base, at: [1, 1], size: [14, 14] }] }
-      patch: { anchor: origin, layer: 2, shapes: [{ op: rect, color: grass_base, at: [1, 1], size: [14, 6] }] }
+      patch: { anchor: origin, layer: 2, shapes: [{ op: rect, color: grass_base, at: [1, 1], size: [14, 4] }] }
+      step1: { anchor: origin, layer: 2, shapes: [{ op: rect, color: grass_base, at: [1, 5], size: [11, 1] }] }
+      step2: { anchor: origin, layer: 2, shapes: [{ op: rect, color: grass_base, at: [3, 6], size: [7, 1] }] }
+      step3: { anchor: origin, layer: 2, shapes: [{ op: rect, color: grass_base, at: [5, 7], size: [2, 1] }] }
+      weeds: { anchor: origin, layer: 3, shapes: [{ op: pixel, color: grass_detail, at: [7, 8] }, { op: pixel, color: grass_detail, at: [11, 7] }] }
+      pebbles: { anchor: origin, layer: 3, shapes: [{ op: pixel, color: dirt_detail, at: [12, 11] }, { op: pixel, color: dirt_detail, at: [5, 13] }] }
 
   grass_dirt_s:
     size: [16, 16]
@@ -89,7 +96,12 @@ tiles:
     regions:
       edge: { anchor: origin, layer: 0, shapes: [{ op: rect, color: tile_edge, at: [0, 0], size: [16, 16] }] }
       fill: { anchor: origin, layer: 1, shapes: [{ op: rect, color: dirt_base, at: [1, 1], size: [14, 14] }] }
-      patch: { anchor: origin, layer: 2, shapes: [{ op: rect, color: grass_base, at: [1, 9], size: [14, 6] }] }
+      patch: { anchor: origin, layer: 2, shapes: [{ op: rect, color: grass_base, at: [1, 11], size: [14, 4] }] }
+      step1: { anchor: origin, layer: 2, shapes: [{ op: rect, color: grass_base, at: [1, 10], size: [11, 1] }] }
+      step2: { anchor: origin, layer: 2, shapes: [{ op: rect, color: grass_base, at: [3, 9], size: [7, 1] }] }
+      step3: { anchor: origin, layer: 2, shapes: [{ op: rect, color: grass_base, at: [5, 8], size: [2, 1] }] }
+      weeds: { anchor: origin, layer: 3, shapes: [{ op: pixel, color: grass_detail, at: [7, 7] }, { op: pixel, color: grass_detail, at: [11, 8] }] }
+      pebbles: { anchor: origin, layer: 3, shapes: [{ op: pixel, color: dirt_detail, at: [12, 4] }, { op: pixel, color: dirt_detail, at: [5, 2] }] }
 
   grass_dirt_e:
     size: [16, 16]
@@ -99,7 +111,12 @@ tiles:
     regions:
       edge: { anchor: origin, layer: 0, shapes: [{ op: rect, color: tile_edge, at: [0, 0], size: [16, 16] }] }
       fill: { anchor: origin, layer: 1, shapes: [{ op: rect, color: dirt_base, at: [1, 1], size: [14, 14] }] }
-      patch: { anchor: origin, layer: 2, shapes: [{ op: rect, color: grass_base, at: [9, 1], size: [6, 14] }] }
+      patch: { anchor: origin, layer: 2, shapes: [{ op: rect, color: grass_base, at: [11, 1], size: [4, 14] }] }
+      step1: { anchor: origin, layer: 2, shapes: [{ op: rect, color: grass_base, at: [10, 1], size: [1, 11] }] }
+      step2: { anchor: origin, layer: 2, shapes: [{ op: rect, color: grass_base, at: [9, 3], size: [1, 7] }] }
+      step3: { anchor: origin, layer: 2, shapes: [{ op: rect, color: grass_base, at: [8, 5], size: [1, 2] }] }
+      weeds: { anchor: origin, layer: 3, shapes: [{ op: pixel, color: grass_detail, at: [7, 9] }, { op: pixel, color: grass_detail, at: [7, 4] }] }
+      pebbles: { anchor: origin, layer: 3, shapes: [{ op: pixel, color: dirt_detail, at: [4, 11] }, { op: pixel, color: dirt_detail, at: [3, 6] }] }
 
   grass_dirt_w:
     size: [16, 16]
@@ -109,7 +126,12 @@ tiles:
     regions:
       edge: { anchor: origin, layer: 0, shapes: [{ op: rect, color: tile_edge, at: [0, 0], size: [16, 16] }] }
       fill: { anchor: origin, layer: 1, shapes: [{ op: rect, color: dirt_base, at: [1, 1], size: [14, 14] }] }
-      patch: { anchor: origin, layer: 2, shapes: [{ op: rect, color: grass_base, at: [1, 1], size: [6, 14] }] }
+      patch: { anchor: origin, layer: 2, shapes: [{ op: rect, color: grass_base, at: [1, 1], size: [4, 14] }] }
+      step1: { anchor: origin, layer: 2, shapes: [{ op: rect, color: grass_base, at: [5, 1], size: [1, 11] }] }
+      step2: { anchor: origin, layer: 2, shapes: [{ op: rect, color: grass_base, at: [6, 3], size: [1, 7] }] }
+      step3: { anchor: origin, layer: 2, shapes: [{ op: rect, color: grass_base, at: [7, 5], size: [1, 2] }] }
+      weeds: { anchor: origin, layer: 3, shapes: [{ op: pixel, color: grass_detail, at: [8, 9] }, { op: pixel, color: grass_detail, at: [8, 3] }] }
+      pebbles: { anchor: origin, layer: 3, shapes: [{ op: pixel, color: dirt_detail, at: [11, 11] }, { op: pixel, color: dirt_detail, at: [12, 5] }] }
 
   grass_dirt_ne:
     size: [16, 16]
@@ -119,7 +141,11 @@ tiles:
     regions:
       edge: { anchor: origin, layer: 0, shapes: [{ op: rect, color: tile_edge, at: [0, 0], size: [16, 16] }] }
       fill: { anchor: origin, layer: 1, shapes: [{ op: rect, color: dirt_base, at: [1, 1], size: [14, 14] }] }
-      patch: { anchor: origin, layer: 2, shapes: [{ op: rect, color: grass_base, at: [9, 1], size: [6, 6] }] }
+      patch: { anchor: origin, layer: 2, shapes: [{ op: rect, color: grass_base, at: [9, 1], size: [6, 4] }] }
+      step1: { anchor: origin, layer: 2, shapes: [{ op: rect, color: grass_base, at: [10, 5], size: [4, 1] }] }
+      step2: { anchor: origin, layer: 2, shapes: [{ op: rect, color: grass_base, at: [11, 6], size: [2, 1] }] }
+      weeds: { anchor: origin, layer: 3, shapes: [{ op: pixel, color: grass_detail, at: [13, 7] }, { op: pixel, color: grass_detail, at: [8, 5] }] }
+      pebbles: { anchor: origin, layer: 3, shapes: [{ op: pixel, color: dirt_detail, at: [3, 11] }, { op: pixel, color: dirt_detail, at: [5, 12] }] }
 
   grass_dirt_nw:
     size: [16, 16]
@@ -129,7 +155,11 @@ tiles:
     regions:
       edge: { anchor: origin, layer: 0, shapes: [{ op: rect, color: tile_edge, at: [0, 0], size: [16, 16] }] }
       fill: { anchor: origin, layer: 1, shapes: [{ op: rect, color: dirt_base, at: [1, 1], size: [14, 14] }] }
-      patch: { anchor: origin, layer: 2, shapes: [{ op: rect, color: grass_base, at: [1, 1], size: [6, 6] }] }
+      patch: { anchor: origin, layer: 2, shapes: [{ op: rect, color: grass_base, at: [1, 1], size: [6, 4] }] }
+      step1: { anchor: origin, layer: 2, shapes: [{ op: rect, color: grass_base, at: [1, 5], size: [4, 1] }] }
+      step2: { anchor: origin, layer: 2, shapes: [{ op: rect, color: grass_base, at: [2, 6], size: [2, 1] }] }
+      weeds: { anchor: origin, layer: 3, shapes: [{ op: pixel, color: grass_detail, at: [2, 7] }, { op: pixel, color: grass_detail, at: [7, 5] }] }
+      pebbles: { anchor: origin, layer: 3, shapes: [{ op: pixel, color: dirt_detail, at: [11, 11] }, { op: pixel, color: dirt_detail, at: [10, 12] }] }
 
   grass_dirt_se:
     size: [16, 16]
@@ -139,7 +169,11 @@ tiles:
     regions:
       edge: { anchor: origin, layer: 0, shapes: [{ op: rect, color: tile_edge, at: [0, 0], size: [16, 16] }] }
       fill: { anchor: origin, layer: 1, shapes: [{ op: rect, color: dirt_base, at: [1, 1], size: [14, 14] }] }
-      patch: { anchor: origin, layer: 2, shapes: [{ op: rect, color: grass_base, at: [9, 9], size: [6, 6] }] }
+      patch: { anchor: origin, layer: 2, shapes: [{ op: rect, color: grass_base, at: [9, 11], size: [6, 4] }] }
+      step1: { anchor: origin, layer: 2, shapes: [{ op: rect, color: grass_base, at: [10, 10], size: [4, 1] }] }
+      step2: { anchor: origin, layer: 2, shapes: [{ op: rect, color: grass_base, at: [11, 9], size: [2, 1] }] }
+      weeds: { anchor: origin, layer: 3, shapes: [{ op: pixel, color: grass_detail, at: [13, 8] }, { op: pixel, color: grass_detail, at: [8, 10] }] }
+      pebbles: { anchor: origin, layer: 3, shapes: [{ op: pixel, color: dirt_detail, at: [3, 4] }, { op: pixel, color: dirt_detail, at: [5, 3] }] }
 
   grass_dirt_sw:
     size: [16, 16]
@@ -149,7 +183,11 @@ tiles:
     regions:
       edge: { anchor: origin, layer: 0, shapes: [{ op: rect, color: tile_edge, at: [0, 0], size: [16, 16] }] }
       fill: { anchor: origin, layer: 1, shapes: [{ op: rect, color: dirt_base, at: [1, 1], size: [14, 14] }] }
-      patch: { anchor: origin, layer: 2, shapes: [{ op: rect, color: grass_base, at: [1, 9], size: [6, 6] }] }
+      patch: { anchor: origin, layer: 2, shapes: [{ op: rect, color: grass_base, at: [1, 11], size: [6, 4] }] }
+      step1: { anchor: origin, layer: 2, shapes: [{ op: rect, color: grass_base, at: [1, 10], size: [4, 1] }] }
+      step2: { anchor: origin, layer: 2, shapes: [{ op: rect, color: grass_base, at: [2, 9], size: [2, 1] }] }
+      weeds: { anchor: origin, layer: 3, shapes: [{ op: pixel, color: grass_detail, at: [2, 8] }, { op: pixel, color: grass_detail, at: [7, 10] }] }
+      pebbles: { anchor: origin, layer: 3, shapes: [{ op: pixel, color: dirt_detail, at: [11, 4] }, { op: pixel, color: dirt_detail, at: [10, 3] }] }
 
   # --- animated water: 3 frames, a shimmer highlight that moves between
   # interior positions. Impassable and non-navigable.

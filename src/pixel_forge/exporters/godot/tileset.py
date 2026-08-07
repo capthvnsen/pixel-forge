@@ -131,9 +131,15 @@ def build_tileset(
             },
         )
 
-    collision_tiles = sorted(tid for tid, tile in doc.tiles.items() if tile.collision is not None)
-    navigation_tiles = sorted(tid for tid, tile in doc.tiles.items() if tile.navigation)
-    occlusion_tiles = sorted(tid for tid, tile in doc.tiles.items() if tile.occlusion)
+    collision_tiles = sorted(
+        {frame_base.get(tid, tid) for tid, tile in doc.tiles.items() if tile.collision is not None}
+    )
+    navigation_tiles = sorted(
+        {frame_base.get(tid, tid) for tid, tile in doc.tiles.items() if tile.navigation}
+    )
+    occlusion_tiles = sorted(
+        {frame_base.get(tid, tid) for tid, tile in doc.tiles.items() if tile.occlusion}
+    )
 
     return GodotTileSetExport(
         atlas_source=texture_path,

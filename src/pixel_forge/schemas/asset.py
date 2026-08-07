@@ -33,6 +33,11 @@ class ExportOptions(BaseModel):
     preview_format: Literal["gif", "webp"] = "gif"
     preview_loop: bool = True
     godot: bool = True
+    # Opt-out for the render-polish pass (shading/outline/ground-shadow). ON by
+    # default for hand-authored shape-DSL art. Imported art (import_region /
+    # import_sheet) sets this False because its pixels are authored elsewhere and
+    # must round-trip byte-exact; polishing would recolor silhouette edges.
+    polish: bool = True
 
 
 class ValidationOptions(BaseModel):
@@ -127,6 +132,11 @@ class TileSpec(BaseModel):
     collision: str | None = None
     navigation: bool = False
     occlusion: bool = False
+    # How many auto-generated interior variants this tile expands to in the built
+    # atlas (1 = the authored tile only). Declarative: rendering backends that
+    # implement variation expansion (rendering.sheet.build_variation_tiles) read
+    # this; exporters ignore it — variants are visual variety, not new tile ids.
+    variations: int = Field(default=1, ge=1)
 
 
 class TerrainSet(BaseModel):
@@ -192,6 +202,12 @@ def parse_asset_doc(data: dict[str, Any]) -> AssetDocUnion:
     offending version otherwise), then injects a top-level `kind` field mirroring
     `asset.type` so the discriminated union can select the right model — see
     `BaseAssetDoc` for why that indirection exists.
+
+    Procedural animations (`animations.<name>.procedural`) are expanded into
+    concrete frames here, once, deterministically: the parsed doc is the complete
+    contract every downstream consumer (validators, exporters, renderer) sees, so
+    they never have to know a shader exists. Hand-authored frames always win —
+    a shader only supplies frames when the animation declares an empty list.
     """
     schema_version = data.get("schema_version")
     if schema_version != 1:
@@ -200,4 +216,20 @@ def parse_asset_doc(data: dict[str, Any]) -> AssetDocUnion:
     if not isinstance(asset, dict) or "type" not in asset:
         raise SchemaError("asset document is missing 'asset.type'")
     payload = {**data, "kind": asset["type"]}
-    return _asset_doc_adapter.validate_python(payload)
+    doc = _asset_doc_adapter.validate_python(payload)
+    if isinstance(doc, SpriteAssetBase):
+        _materialize_procedural_animations(doc)
+    return doc
+
+
+def _materialize_procedural_animations(doc: SpriteAssetBase) -> None:
+    """Replace empty `frames` lists on procedural animations with their shader's
+    generated frames. Imported lazily: `pixel_forge.animation.cycles` imports
+    this package's models, so a module-level import here would cycle during
+    package initialisation."""
+    from pixel_forge.animation.cycles import resolve_animation_frames
+
+    for animation in doc.animations.values():
+        if animation.procedural is None or animation.frames:
+            continue
+        animation.frames = resolve_animation_frames(doc, animation)

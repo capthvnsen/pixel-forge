@@ -6,18 +6,19 @@ of animation A in direction D" is computed here, once, deterministically.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from types import MappingProxyType
 
+from pixel_forge.animation.cycles import resolve_animation_frames
 from pixel_forge.errors import ForgeError
 from pixel_forge.schemas import (
-    AnimationSpec,
     FrameSpec,
     RegionTransform,
     SpriteAssetBase,
     TerrainAsset,
 )
+from pixel_forge.schemas.animation import EasingName
 
 
 @dataclass(frozen=True)
@@ -36,6 +37,11 @@ class ResolvedFrame:
     # Identical to `transforms` whenever overrides weren't inherited. See
     # `rendering.local`'s module docstring for why this exists.
     mirror_unsafe_transforms: Mapping[str, RegionTransform] = field(default_factory=dict)
+    # Animation-quality metadata surfaced from the FrameSpec: the easing curve
+    # used to interpolate into this frame in timeline sampling (None = linear),
+    # and whether the frame's pose should snap-and-hold instead of easing.
+    easing: EasingName | None = None
+    hold: bool = False
 
 
 @dataclass(frozen=True)
@@ -145,13 +151,13 @@ def _merge_frame_transforms(
 def _resolve_direction_frames(
     doc: SpriteAssetBase,
     animation_name: str,
-    animation: AnimationSpec,
+    frame_specs: Sequence[FrameSpec],
     direction: str,
 ) -> list[ResolvedFrame]:
     mirror_src = doc.mirror.get(direction)
     overrides, inherited = _direction_overrides(doc, direction, mirror_src)
     resolved: list[ResolvedFrame] = []
-    for index, frame in enumerate(animation.frames):
+    for index, frame in enumerate(frame_specs):
         transforms = _merge_frame_transforms(doc, overrides, frame)
         mirror_unsafe_transforms = (
             transforms
@@ -168,16 +174,61 @@ def _resolve_direction_frames(
                 transforms=transforms,
                 mirrored_from=mirror_src,
                 mirror_unsafe_transforms=mirror_unsafe_transforms,
+                easing=frame.easing,
+                hold=frame.hold,
             )
         )
     return resolved
+
+
+def resolve_sampled_frame(
+    doc: SpriteAssetBase,
+    animation: str,
+    direction: str,
+    spec: FrameSpec,
+    *,
+    index: int,
+) -> ResolvedFrame:
+    """Resolve a single (usually resampled) `FrameSpec` into a `ResolvedFrame`.
+
+    Direction overrides merge under the sampled frame transforms exactly as they
+    do for authored frames (`_resolve_direction_frames`), and a mirrored
+    direction's `mirror_unsafe_transforms` negates inherited override x-offsets.
+    The renderer uses this to emit eased sub-frames (see
+    `pixel_forge.animation.timeline.resample_frames`): easing/hold metadata is
+    already baked into the sampled transforms, so the returned frame carries
+    ``easing=None``/``hold=False``.
+    """
+    mirror_src = doc.mirror.get(direction)
+    overrides, inherited = _direction_overrides(doc, direction, mirror_src)
+    transforms = _merge_frame_transforms(doc, overrides, spec)
+    mirror_unsafe_transforms = (
+        transforms
+        if not inherited
+        else _merge_frame_transforms(doc, overrides, spec, negate_override_offset_x=True)
+    )
+    return ResolvedFrame(
+        direction=direction,
+        animation=animation,
+        index=index,
+        duration_ms=spec.duration_ms,
+        events=tuple(spec.events),
+        transforms=transforms,
+        mirrored_from=mirror_src,
+        mirror_unsafe_transforms=mirror_unsafe_transforms,
+        easing=None,
+        hold=False,
+    )
 
 
 def resolve_frames(doc: SpriteAssetBase) -> list[ResolvedFrame]:
     """Expand a sprite asset doc into a flat, deterministically ordered frame list.
 
     Order: animations in `doc.animations` declaration order, then directions in
-    `doc.directions` order, then frame index ascending.
+    `doc.directions` order, then frame index ascending. Procedural animations
+    (declared via `procedural` with an empty frames list) are expanded through
+    `animation.cycles` — a fallback for programmatically-built docs; specs loaded
+    via `parse_asset_doc` are already materialized, so both paths agree.
     """
     if not doc.animations:
         raise ForgeError("doc.animations must not be empty")
@@ -185,8 +236,11 @@ def resolve_frames(doc: SpriteAssetBase) -> list[ResolvedFrame]:
 
     frames: list[ResolvedFrame] = []
     for animation_name, animation in doc.animations.items():
+        frame_specs = resolve_animation_frames(doc, animation)
         for direction in doc.directions:
-            frames.extend(_resolve_direction_frames(doc, animation_name, animation, direction))
+            frames.extend(
+                _resolve_direction_frames(doc, animation_name, frame_specs, direction)
+            )
     return frames
 
 
@@ -201,7 +255,10 @@ def frames_for(doc: SpriteAssetBase, animation: str, direction: str) -> list[Res
 def animation_duration_ms(doc: SpriteAssetBase, animation: str) -> int:
     if animation not in doc.animations:
         raise ForgeError(f"unknown animation {animation!r}")
-    return sum(frame.duration_ms for frame in doc.animations[animation].frames)
+    return sum(
+        frame.duration_ms
+        for frame in resolve_animation_frames(doc, doc.animations[animation])
+    )
 
 
 def resolve_terrain_frames(doc: TerrainAsset) -> list[ResolvedTileFrame]:

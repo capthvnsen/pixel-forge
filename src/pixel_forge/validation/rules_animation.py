@@ -7,6 +7,7 @@ checks read the rendered canvases in `RuleContext.frames`.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Sequence
 
 import numpy as np
@@ -17,6 +18,12 @@ from pixel_forge.domain.palette import rgba_to_hex
 from pixel_forge.rendering.canvas import Canvas
 from pixel_forge.schemas import Finding, Severity, SpriteAssetBase
 from pixel_forge.validation.engine import RuleContext, make_finding, register
+from pixel_forge.validation.rules_pixel import (
+    _MAX_COORDS_PIX,
+    _edge_mask,
+    _outline_rgba,
+    _silhouette_mask,
+)
 
 _SPRITE_TYPES = ("character", "enemy", "prop")
 
@@ -74,7 +81,11 @@ def _feet_like_anchor(doc: SpriteAssetBase) -> tuple[str, list[str]] | None:
     severity="error",
     kind="deterministic",
     applies_to=_SPRITE_TYPES,
-    description="Baseline drift: measured lowest opaque row must equal doc.asset.baseline_y.",
+    description=(
+        "Baseline drift: measured lowest opaque row (excluding the render-polish "
+        "contact-shadow band, RuleContext.polish_shadow_rows) must equal "
+        "doc.asset.baseline_y."
+    ),
 )
 def _ani001(ctx: RuleContext) -> list[Finding]:
     if not ctx.doc.validation.require_stable_baseline:
@@ -88,7 +99,11 @@ def _ani001(ctx: RuleContext) -> list[Finding]:
         bbox = ctx.frames[key].bbox()
         if bbox is None:
             continue
-        measured = bbox[3] - 1
+        # The polish contact shadow is appended below the sprite's ground line
+        # (a constant band across every frame), so it must not read as baseline
+        # drift. With no polish (polish_shadow_rows=0) this is the raw lowest
+        # opaque row, exactly as before.
+        measured = bbox[3] - 1 - ctx.polish_shadow_rows
         if measured != baseline_y:
             findings.append(
                 make_finding(
@@ -527,4 +542,292 @@ def _ani009(ctx: RuleContext) -> list[Finding]:
                     },
                 )
             )
+    return findings
+
+
+# ---------------------------------------------------------------------------
+# ANI010-ANI012: machine-readable cross-frame quality heuristics (W3-A). Every
+# finding carries measurements["coords"] = [[x, y], ...] (row-major, capped).
+# ---------------------------------------------------------------------------
+
+# Frames must be at most this fast (ms) for ANI011 to judge movement as jitter:
+# above it, a >2px step is a deliberate slow pose change, not a visible pop.
+_ANI011_MAX_FRAME_MS = 150
+# Consecutive-frame opaque-count swing above this ratio fires ANI012.
+_ANI012_MAX_VOLUME_SWING = 0.15
+
+
+def _outline_thickness(
+    ctx: RuleContext, canvas: Canvas, outline: set[tuple[int, int, int, int]]
+) -> int | None:
+    """Max inward run length (px) of outline-coloured pixels from the silhouette
+    edge: 1 for a 1px ink outline, 3 for a 3px outline, etc. None when the
+    silhouette has no edge. The render-polish shadow band is excluded.
+
+    The run counts interior ink only (edge pixels are never counted as part of
+    the run), so walking along an all-ink boundary cannot inflate the thickness
+    at corners; the maximum over the whole edge is the outline's true weight.
+    """
+    opaque = _silhouette_mask(ctx, canvas)
+    if not opaque.any():
+        return None
+    edge = _edge_mask(opaque)
+    if not edge.any():
+        return None
+    arr = canvas.array
+    h, w = opaque.shape
+    ink = np.zeros((h, w), dtype=bool)
+    for rgba in outline:
+        ink |= np.all(arr == np.array(rgba, dtype=np.uint8), axis=-1)
+    interior_ink = ink & ~edge
+    depths: list[int] = []
+    ys, xs = np.nonzero(edge)
+    for y, x in zip(ys.tolist(), xs.tolist(), strict=True):
+        edge_ink = 1 if ink[y, x] else 0
+        # Inward directions are the opposites of the transparent 4-neighbours
+        # (out-of-canvas counts as transparent). The run stops at edge pixels so
+        # boundary-parallel walks contribute nothing.
+        for dy, dx in ((0, 1), (0, -1), (1, 0), (-1, 0)):
+            ny, nx = y + dy, x + dx
+            if 0 <= ny < h and 0 <= nx < w and opaque[ny, nx]:
+                continue  # opaque neighbour: this is not an outward direction
+            d = 0
+            iy, ix = y - dy, x - dx
+            while (
+                0 <= iy < h
+                and 0 <= ix < w
+                and interior_ink[iy, ix]
+            ):
+                d += 1
+                iy -= dy
+                ix -= dx
+            # The edge pixel itself is the outline's first px; the inward run
+            # extends it (a 3px outline measures 3: edge + 2 interior ink).
+            depths.append(edge_ink + d)
+    if not depths:
+        return None
+    # Median, not max: corner pixels of a thick frame walk the full band where
+    # the outline's two sides overlap, inflating the max. The median across the
+    # silhouette is the outline's typical weight (3 for a 3px ring, 1 for 1px).
+    depths.sort()
+    return depths[len(depths) // 2]
+
+
+@register(
+    "ANI010",
+    severity="warning",
+    kind="heuristic",
+    applies_to=_SPRITE_TYPES,
+    description=(
+        "Inconsistent-outline heuristic: within one animation+direction, the "
+        "silhouette's outline thickness (max inward run of outline-coloured "
+        "pixels from the edge, as in PIX018's coverage model) must stay roughly "
+        "constant across frames. A frame whose outline is 1px while its "
+        "neighbours are 3px visibly flickers the silhouette's weight. Skipped "
+        "when the palette declares no outline colour, or when frames don't all "
+        "have an edge."
+    ),
+)
+def _ani010(ctx: RuleContext) -> list[Finding]:
+    outline = _outline_rgba(ctx)
+    if not outline:
+        return []
+    findings = []
+    for (animation, direction), frames in sorted(_group_by_anim_direction(ctx.resolved).items()):
+        if len(frames) < 2:
+            continue
+        thicknesses: list[tuple[ResolvedFrame, int]] = []
+        for frame in frames:
+            canvas = ctx.frames.get((animation, direction, frame.index))
+            if canvas is None:
+                continue
+            thickness = _outline_thickness(ctx, canvas, outline)
+            if thickness is not None:
+                thicknesses.append((frame, thickness))
+        if len(thicknesses) < 2:
+            continue
+        values = [t for _f, t in thicknesses]
+        lo, hi = min(values), max(values)
+        if hi - lo < 2:
+            continue
+        thinnest = min(thicknesses, key=lambda item: item[1])
+        edge = _edge_mask(
+            _silhouette_mask(ctx, ctx.frames[(animation, direction, thinnest[0].index)])
+        )
+        ys, xs = np.nonzero(edge)
+        coords = [[int(x), int(y)] for y, x in zip(ys.tolist(), xs.tolist(), strict=True)][
+            :_MAX_COORDS_PIX
+        ]
+        findings.append(
+            make_finding(
+                ctx,
+                "ANI010",
+                "warning",
+                "heuristic",
+                animation=animation,
+                direction=direction,
+                message=(
+                    f"outline thickness varies between {lo}px and {hi}px across "
+                    f"the frames of {animation!r}/{direction!r}; the silhouette's "
+                    "edge weight flickers"
+                ),
+                remediation=(
+                    "match every frame's outline to the thickest one (or the "
+                    "intended style) so the silhouette edge stays consistent"
+                ),
+                measurements={
+                    "min_thickness_px": lo,
+                    "max_thickness_px": hi,
+                    "thinnest_frame": thinnest[0].index,
+                    "coords": coords,
+                },
+            )
+        )
+    return findings
+
+
+@register(
+    "ANI011",
+    severity="warning",
+    kind="heuristic",
+    applies_to=_SPRITE_TYPES,
+    description=(
+        "Animation-jitter heuristic: a region's resolved anchor position in frame "
+        "N differs by more than 2px (Euclidean) from *both* neighbours while the "
+        "animation runs at <= 150ms/frame. A single frame that jumps out and back "
+        "reads as a visible pop; continuous motion with every step <= 2px, or any "
+        "motion in a slower animation, is left alone."
+    ),
+)
+def _ani011(ctx: RuleContext) -> list[Finding]:
+    doc = _sprite_doc(ctx)
+    if doc is None:
+        return []
+    findings = []
+    for (animation, direction), frames in sorted(_group_by_anim_direction(ctx.resolved).items()):
+        if len(frames) < 3:
+            continue
+        for region_name in sorted(doc.regions):
+            anchor_name = doc.regions[region_name].anchor
+            positions = [
+                anchor_world_pos(doc.anchors, anchor_name, frame.transforms[region_name].offset)
+                for frame in frames
+            ]
+            for i in range(1, len(frames) - 1):
+                if any(frames[j].duration_ms > _ANI011_MAX_FRAME_MS for j in (i - 1, i, i + 1)):
+                    continue
+                prev_pos, pos, next_pos = positions[i - 1], positions[i], positions[i + 1]
+                d_prev = math.hypot(pos[0] - prev_pos[0], pos[1] - prev_pos[1])
+                d_next = math.hypot(next_pos[0] - pos[0], next_pos[1] - pos[1])
+                if d_prev <= 2.0 or d_next <= 2.0:
+                    continue
+                findings.append(
+                    make_finding(
+                        ctx,
+                        "ANI011",
+                        "warning",
+                        "heuristic",
+                        animation=animation,
+                        direction=direction,
+                        frame=frames[i].index,
+                        region=region_name,
+                        message=(
+                            f"region {region_name!r} moved {d_prev:.1f}px into frame "
+                            f"{frames[i].index} and {d_next:.1f}px out of it at "
+                            f"{frames[i].duration_ms}ms/frame; reads as a jump"
+                        ),
+                        remediation=(
+                            "split the jump into 1-2px steps across intermediate "
+                            "frames, or slow the animation below the pop threshold"
+                        ),
+                        measurements={
+                            "previous_x": prev_pos[0],
+                            "previous_y": prev_pos[1],
+                            "current_x": pos[0],
+                            "current_y": pos[1],
+                            "next_x": next_pos[0],
+                            "next_y": next_pos[1],
+                            "delta_previous_px": round(d_prev, 2),
+                            "delta_next_px": round(d_next, 2),
+                            "coords": [
+                                [prev_pos[0], prev_pos[1]],
+                                [pos[0], pos[1]],
+                                [next_pos[0], next_pos[1]],
+                            ],
+                        },
+                    )
+                )
+    return findings
+
+
+@register(
+    "ANI012",
+    severity="warning",
+    kind="deterministic",
+    applies_to=_SPRITE_TYPES,
+    description=(
+        "Shifting-body-volume check: for a looping animation, the opaque-pixel "
+        "count between consecutive frames must not swing by more than 15% of the "
+        "previous frame's count. A loop whose body mass visibly grows and shrinks "
+        "pulses on playback. Deterministic — a fixed threshold on exact pixel "
+        "counts. ANI008 is the looser (40%) heuristic for non-looping animations "
+        "too; this rule is the stricter, loop-only variant."
+    ),
+)
+def _ani012(ctx: RuleContext) -> list[Finding]:
+    doc = _sprite_doc(ctx)
+    if doc is None:
+        return []
+    findings = []
+    for (animation, direction), frames in sorted(_group_by_anim_direction(ctx.resolved).items()):
+        anim_spec = doc.animations.get(animation)
+        if anim_spec is None or not anim_spec.loop or len(frames) < 2:
+            continue
+        canvases = _canvases_or_none(ctx, animation, direction, frames)
+        if canvases is None:
+            continue
+        prev_count: int | None = None
+        prev_mask: np.ndarray | None = None
+        for frame, canvas in zip(frames, canvases, strict=True):
+            mask = canvas.array[..., 3] != 0
+            count = int(np.count_nonzero(mask))
+            if prev_count is not None and prev_mask is not None:
+                ratio = abs(count - prev_count) / max(prev_count, 1)
+                if ratio > _ANI012_MAX_VOLUME_SWING:
+                    diff = mask != prev_mask
+                    ys, xs = np.nonzero(diff)
+                    coords = [
+                        [int(x), int(y)]
+                        for y, x in zip(ys.tolist(), xs.tolist(), strict=True)
+                    ][:_MAX_COORDS_PIX]
+                    findings.append(
+                        make_finding(
+                            ctx,
+                            "ANI012",
+                            "warning",
+                            "deterministic",
+                            animation=animation,
+                            direction=direction,
+                            frame=frame.index,
+                            message=(
+                                f"opaque pixel count swung {ratio:.1%} between "
+                                f"consecutive frames of looping animation {animation!r} "
+                                f"({prev_count}px -> {count}px); body volume should "
+                                "stay roughly constant"
+                            ),
+                            remediation=(
+                                "check for a dropped/duplicated region between the "
+                                "two frames; volume should vary smoothly, not jump"
+                            ),
+                            measurements={
+                                "previous_count": prev_count,
+                                "current_count": count,
+                                "ratio": round(ratio, 3),
+                                "max_swing": _ANI012_MAX_VOLUME_SWING,
+                                "coords": coords,
+                            },
+                        )
+                    )
+            prev_count = count
+            prev_mask = mask
     return findings

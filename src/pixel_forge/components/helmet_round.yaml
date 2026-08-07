@@ -1,0 +1,14 @@
+id: helmet_round
+description: A rounded metal helmet with a short nasal guard, worn on the head.
+anchor: "@attach"
+regions:
+  helmet:
+    anchor: "@attach"
+    layer: 12
+    shapes:
+      - {op: ellipse, color: metal_shadow, at: [-4, -12], size: [8, 7]}
+      - {op: ellipse, color: metal_mid, at: [-3, -11], size: [6, 5]}
+      - {op: ellipse, color: metal_light, at: [-3, -11], size: [4, 2]}
+      - {op: rect, color: metal_shadow, at: [-1, -5], size: [2, 1]}
+      - {op: rect, color: metal_light, at: [-1, -5], size: [2, 1]}
+      - {op: rect, color: metal_shadow, at: [-1, -4], size: [2, 2]}

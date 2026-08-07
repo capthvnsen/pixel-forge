@@ -65,6 +65,7 @@ static func validate(manifest: Dictionary, manifest_path: String, manifest_dir: 
 	var texture_sizes := _check_textures(manifest, manifest_path, manifest_dir, result)
 	_check_sprite_frame_rects(manifest, manifest_path, texture_sizes, result)
 	_check_tileset_bounds(manifest, manifest_path, texture_sizes, result)
+	_check_animation_player(manifest, manifest_path, result)
 
 	return result
 
@@ -161,4 +162,61 @@ static func _check_tileset_bounds(
 					+ "%dx%d exceeds atlas bounds %s"
 				)
 				% [manifest_path, str(tile.get("tile_id", "?")), x, y, tw, th, str(atlas_size)]
+			)
+
+
+## `animation_player.animations.<name>.total_duration_ms` is what the importer sets
+## `Animation.length` from — a missing/non-positive value would silently truncate
+## the animation (the exact bug this check exists to catch), so it is a hard error.
+## When the `animations` dict is present it is also the authoritative animation
+## list: every track's first `node_path` segment must name one of its entries.
+static func _check_animation_player(
+	manifest: Dictionary, manifest_path: String, result: Result
+) -> void:
+	var ap_data = manifest.get("animation_player")
+	if typeof(ap_data) != TYPE_DICTIONARY:
+		return
+	var animations_data = ap_data.get("animations", {})
+	if typeof(animations_data) != TYPE_DICTIONARY:
+		result.errors.append(
+			"%s: animation_player.animations must be an object of animation metadata"
+			% manifest_path
+		)
+		return
+
+	var known: Dictionary = {}
+	for anim_name in animations_data.keys():
+		var anim_meta = animations_data[anim_name]
+		if typeof(anim_meta) != TYPE_DICTIONARY:
+			result.errors.append(
+				"%s: animation_player.animations.%s must be an object" % [manifest_path, anim_name]
+			)
+			continue
+		known[str(anim_name)] = true
+		var total_ms: Variant = anim_meta.get("total_duration_ms", -1)
+		if not (typeof(total_ms) in [TYPE_INT, TYPE_FLOAT]) or float(total_ms) <= 0:
+			result.errors.append(
+				(
+					"%s: animation_player.animations.%s.total_duration_ms must be a "
+					+ "positive integer (milliseconds), got %s"
+				)
+				% [manifest_path, anim_name, str(total_ms)]
+			)
+
+	# Cross-check tracks against the authoritative animation list (only when the
+	# list is present; a pre-duration-fix manifest without it can't be checked).
+	if known.is_empty():
+		return
+	for track in ap_data.get("tracks", []):
+		var node_path: String = str(track.get("node_path", ""))
+		var parts := node_path.split("/")
+		if parts.is_empty() or parts[0].is_empty():
+			continue
+		if not known.has(parts[0]):
+			result.errors.append(
+				(
+					"%s: animation_player track node_path '%s' references unknown "
+					+ "animation '%s' (not in animation_player.animations)"
+				)
+				% [manifest_path, node_path, parts[0]]
 			)
