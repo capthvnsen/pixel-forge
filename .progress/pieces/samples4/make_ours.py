@@ -26,12 +26,14 @@ OUT = Path("/Users/alex/orca/projects/Pixelartllm-buddy/.progress/pieces/samples
 ROW_DIRS = ("south", "west", "east", "north")
 
 
-def build_doc():
+def build_doc(style: str = "haired"):
     tmp = Path(tempfile.mkdtemp(prefix="gauntlet-chibi-"))
     root = tmp / "proj"
     api.init_project(root, "chibi")
     front = {}
-    for role, img in draw_layers().items():
+    for role, img in draw_layers(style).items():
+        if img.getbbox() is None:
+            continue  # empty layer (e.g. hair on the bald style) — skip
         p = root / "layers" / f"{role}.png"
         p.parent.mkdir(parents=True, exist_ok=True)
         img.save(p)
@@ -82,27 +84,35 @@ def walk_sheet_4dir(animated, canvas, x4=True) -> Image.Image:
 
 
 def main() -> None:
-    root, doc, palette, result = build_doc()
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--style", choices=("haired", "bald"), default="haired")
+    parser.add_argument("--out-suffix", default="")
+    args = parser.parse_args()
+
+    root, doc, palette, result = build_doc(args.style)
+    suffix = args.out_suffix or (f"_{args.style}" if args.style != "haired" else "")
     print(f"imported: canvas {result.canvas}, palette {result.palette_size}")
     canvas = tuple(doc.asset.canvas)
     print("canvas:", canvas)
 
     rest = project_directions(doc, palette)
-    rest_sheet_4dir(rest, canvas).save(OUT / "ours_rest_4dir.png")
+    rest_sheet_4dir(rest, canvas).save(OUT / f"ours_rest_4dir{suffix}.png")
 
     walk = generate_joint_walk_cycle(doc, {})
     animated = project_animated_frames(doc, palette, walk)
-    walk_sheet_4dir(animated, canvas).save(OUT / "ours_walk_4dir.png")
+    walk_sheet_4dir(animated, canvas).save(OUT / f"ours_walk_4dir{suffix}.png")
 
     # also an 8-frame walk for animation-quality forensics
     full = Canvas(8 * canvas[0] + 9 * 2, 4 * canvas[1] + 5 * 2)
     for r, d in enumerate(ROW_DIRS):
         for fi, frame in enumerate(animated[d]):
             full.blit(frame, (2 + fi * (canvas[0] + 2), 2 + r * (canvas[1] + 2)))
-    full.scale(4).save_png(OUT / "ours_walk_8f.png")
+    full.scale(4).save_png(OUT / f"ours_walk_8f{suffix}.png")
 
     print("gates:", api.validate_asset(root, "chibi").blocking)
-    print("ours sheets:", OUT / "ours_rest_4dir.png", OUT / "ours_walk_4dir.png")
+    print("ours sheets:", OUT / f"ours_rest_4dir{suffix}.png", OUT / f"ours_walk_4dir{suffix}.png")
 
 
 if __name__ == "__main__":

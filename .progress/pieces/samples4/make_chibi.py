@@ -80,11 +80,17 @@ def _round_corners(img: Image.Image, x0: int, y0: int, x1: int, y1: int, color: 
             _px(img, x, y, (0, 0, 0, 0))
 
 
-def draw_layers() -> dict[str, Image.Image]:
+def draw_layers(style: str = "haired") -> dict[str, Image.Image]:
+    """Layered front view. style='haired' (default): cyan-hair chibi.
+    style='bald': a bald + sunglasses chibi (the pack's simplest archetype —
+    s005 has no hair texture to reproduce, so the projection's ceiling is
+    higher)."""
     layers = {
         k: _new()
         for k in ("hair", "head", "face", "torso", "arm_left", "arm_right", "leg_left", "leg_right")
     }
+    if style == "bald":
+        return draw_bald(layers)
 
     # ============ HAIR (rows 0-5 dome, rows 4-12 curtains, dithered) ============
     hair = layers["hair"]
@@ -136,6 +142,15 @@ def draw_layers() -> dict[str, Image.Image]:
     _px(face, 11, 8, EYE_HI)
     _rect(face, 8, 12, 11, 12, MOUTH)  # mouth line
 
+    _draw_body(layers)
+
+    # NOTE: deliberately NO ground shadow layer (would inflate limb bboxes and
+    # break the walk's geometry clamps — the samples have no shadow either).
+    return layers
+
+
+def _draw_body(layers: dict[str, Image.Image]) -> None:
+    """Torso + arms + legs — shared by both styles."""
     # ============ TORSO (rows 14-20, jacket with placket + buttons) ============
     torso = layers["torso"]
     _outline_rect(torso, 3, 14, 16, 20, SHIRT_MID, border=SHIRT_EDGE)
@@ -175,8 +190,49 @@ def draw_layers() -> dict[str, Image.Image]:
         _px(leg, x + 3, 30, SHOE_EDGE)
         _px(leg, x + 1, 21, PANTS_EDGE)
 
-    # NOTE: deliberately NO ground shadow layer (would inflate limb bboxes and
-    # break the walk's geometry clamps — the samples have no shadow either).
+
+def draw_bald(layers: dict[str, Image.Image]) -> dict[str, Image.Image]:
+    """Bald + sunglasses chibi — the pack's simplest archetype (s005)."""
+    # Scalp + face: one round head, rows 2-13 (no hair). The dome is ROUNDED
+    # 2px (an arc, not a box) and the ears are authored side pixels that the
+    # projection preserves into the profiles.
+    head = layers["head"]
+    _rect(head, 5, 2, 14, 13, SKIN_MID)  # scalp + face plane
+    _rect(head, 6, 2, 8, 3, SKIN_HI)  # top-left scalp highlight
+    _rect(head, 4, 12, 15, 13, SKIN_LO)  # chin shadow
+    # 2px-rounded dome: trim the top corners (cols 4/15 row 2-3, cols 5/14 row 2)
+    _px(head, 4, 2, (0, 0, 0, 0))
+    _px(head, 15, 2, (0, 0, 0, 0))
+    _px(head, 4, 3, (0, 0, 0, 0))
+    _px(head, 15, 3, (0, 0, 0, 0))
+    _px(head, 5, 2, (0, 0, 0, 0))
+    _px(head, 14, 2, (0, 0, 0, 0))
+    # ears (rows 7-8, at the head's sides — survive into the profile views)
+    _px(head, 4, 7, SKIN_MID)
+    _px(head, 4, 8, SKIN_MID)
+    _px(head, 15, 7, SKIN_MID)
+    _px(head, 15, 8, SKIN_MID)
+    # selout the scalp + face (dark warm-brown)
+    for x in range(4, 16):
+        _px(head, x, 2, SKIN_EDGE)
+        _px(head, x, 13, SKIN_EDGE)
+    for y in range(2, 14):
+        _px(head, 4, y, SKIN_EDGE)
+        _px(head, 15, y, SKIN_EDGE)
+    # ear outline hints (paint AFTER the selout so they survive)
+    _px(head, 4, 7, SKIN_EDGE)
+    _px(head, 15, 7, SKIN_EDGE)
+
+    # Sunglasses: a dark bar with a frame + nose bridge (rows 7-9)
+    face = layers["face"]
+    _rect(face, 6, 7, 9, 9, EYE)  # left lens
+    _rect(face, 11, 7, 14, 9, EYE)  # right lens
+    _px(face, 9, 8, EYE_HI)  # bridge highlight
+    _px(face, 10, 8, EYE_HI)
+    _px(face, 6, 7, EYE_HI)  # lens glints
+    _px(face, 11, 7, EYE_HI)
+    _rect(face, 8, 11, 11, 11, MOUTH)  # mouth line
+    _draw_body(layers)
     return layers
 
 
