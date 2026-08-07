@@ -299,6 +299,19 @@ class _ViewParams:
     # re-orient with the body; diagonals flip body regions only — their limbs
     # carry the far/near depth shading instead, and flipping a limb after
     # darkening would cancel the depth cue)
+    region_squash: Mapping[str, tuple[int, int]] | None = None
+    # Per-region squash overrides: keys are role categories ("head", "hair",
+    # "torso", "arm", "leg"); a matching region uses that (num, den) instead
+    # of the view's global squash_num/squash_den.  Unlisted categories fall
+    # back to the view default.  None means no overrides (all regions use the
+    # global ratio).  Keeps side-view volume (head/sphere ~4/5, torso ~2/3,
+    # thin limbs ~1/2) rather than the flat global 1/2 that produces
+    # cardboard cutouts.
+    shade_far_half: bool = False
+    # true side views darken the camera-FAR half of every body region one ramp
+    # step after the light flip, so the profile reads as a lit chest over a
+    # shaded back instead of a flat stripe (round-3 gauntlet critic: "no
+    # volume — a flat 2D cardboard cutout turned sideways").
 
 
 _FRONT = _ViewParams(
@@ -326,6 +339,14 @@ _SIDE = _ViewParams(
     shade_far_limbs=False,
     flip_light_side=True,
     flip_limbs=True,
+    region_squash={
+        "head": (4, 5),
+        "hair": (4, 5),
+        "torso": (2, 3),
+        "arm": (2, 3),
+        "leg": (2, 3),
+    },
+    shade_far_half=True,
 )
 _DIAG_FRONT = _ViewParams(
     squash_num=3,
@@ -566,6 +587,77 @@ def _strip_far_side_face(canvas: Canvas, facing: int) -> Canvas:
         for x, y in cluster:
             out.set_pixel(x, y, fill)
     return out
+
+
+def _shade_far_half(canvas: Canvas, facing: int, darker: Mapping[RGBA, RGBA]) -> Canvas:
+    """Darken the camera-FAR half of a region canvas one ramp step.
+
+    The side profile's depth cue: after the light flip re-orients the ramps so
+    the near/chest side carries the light end, this shades the far/back half
+    one step darker, so the profile reads as a lit chest over a shaded back
+    instead of a flat stripe. A no-op when the palette has no ramp map.
+    """
+    if not darker:
+        return canvas
+    out = canvas.copy()
+    w = out.width
+    for y in range(out.height):
+        for x in range(w):
+            far_side = x < w // 2 if facing > 0 else x >= w // 2
+            if not far_side:
+                continue
+            rgba = tuple(out.array[y, x])
+            if rgba in darker:
+                out.set_pixel(x, y, darker[rgba])
+    return out
+
+
+def _strip_far_side_detail(canvas: Canvas, facing: int) -> Canvas:
+    """Remove all opaque pixels on the far side of a face-detail region's
+    content centre axis, so a side-view profile shows exactly one eye at any
+    squash ratio.  Unlike ``_strip_far_side_face`` (which targets interior-ink
+    clusters inside the *head* region), this operates on face-detail regions
+    whose entire content IS the face feature.  Returns the input unchanged
+    when there is nothing to strip."""
+    bbox = canvas.bbox()
+    if bbox is None:
+        return canvas
+    region_centre2 = bbox[0] + bbox[2] - 1  # doubled content centre column
+    strip: list[tuple[int, int]] = []
+    for y in range(canvas.height):
+        for x in range(canvas.width):
+            if canvas.array[y, x][3] == 0:
+                continue
+            px2 = 2 * x  # doubled pixel centre
+            if (facing > 0 and px2 < region_centre2) or (facing < 0 and px2 > region_centre2):
+                strip.append((x, y))
+    if not strip:
+        return canvas
+    out = canvas.copy()
+    for x, y in strip:
+        out.set_pixel(x, y, (0, 0, 0, 0))
+    return out
+
+
+def _region_squash_category(name: str, roles: CharacterRoles) -> str | None:
+    """Map a region name to its squash-override category.
+
+    Returns one of ``"head"``, ``"hair"``, ``"torso"``, ``"arm"``, ``"leg"``
+    when the region matches a known role, or ``None`` for unmapped regions
+    (static/face/shadow/weapon/…).  Hair detection is name-heuristic (any
+    region whose lowercased name contains ``"hair"``).
+    """
+    if roles.head is not None and name == roles.head:
+        return "head"
+    if roles.torso is not None and name == roles.torso:
+        return "torso"
+    if name in (roles.arm_left, roles.arm_right):
+        return "arm"
+    if name in (roles.leg_left, roles.leg_right):
+        return "leg"
+    if "hair" in name.lower():
+        return "hair"
+    return None
 
 
 def _limb_sets(roles: CharacterRoles, facing: int) -> tuple[frozenset[str], frozenset[str]]:
@@ -811,13 +903,26 @@ def _build_view(
         # feature survives (a profile shows one eye, not two squeezed together).
         if name == roles.head and params.profile:
             canvas = _strip_far_side_face(canvas, facing)
-        result = _squash_x(canvas, params.squash_num, params.squash_den)
+        # Face-detail regions (eyes, visor, …) in true side views: strip the
+        # far-side content explicitly so exactly one eye survives at ANY squash
+        # ratio (ratio-independent — the far eye must never leak through).
+        if name in roles.face and params.profile:
+            canvas = _strip_far_side_detail(canvas, facing)
+        # Per-region squash override: head/hair keep more volume in side views.
+        num, den = params.squash_num, params.squash_den
+        if params.region_squash is not None:
+            cat = _region_squash_category(name, roles)
+            if cat is not None and cat in params.region_squash:
+                num, den = params.region_squash[cat]
+        result = _squash_x(canvas, num, den)
         # Depth/volume shading (after the squash, before the limb shifts —
         # both are colour remaps, so order against the shifts is immaterial).
         if params.shade_far_limbs and name in far:
             result = _remap_colors(result, ramps.rgba_darker)
         if params.flip_light_side and (params.flip_limbs or (name not in far and name not in near)):
             result = _remap_colors(result, ramps.rgba_flip)
+        if params.shade_far_half:
+            result = _shade_far_half(result, facing, ramps.rgba_darker)
         # Face detail is authored facing the viewer; a squashed view must keep
         # the eye/visor on the side the character turns TOWARD. The squash's
         # inverse mapping can make the near-side feature's source column
@@ -825,7 +930,7 @@ def _build_view(
         # (e.g. the left eye on a right-facing diagonal — the classic
         # cross-eyed tell). When the surviving face content sits on the far
         # side of the canvas centre axis, mirror it across to the near side.
-        if name in roles.face and params.squash_num != params.squash_den:
+        if name in roles.face and num != den:
             sign = _away_sign(result)
             if sign and ((facing > 0 and sign < 0) or (facing < 0 and sign > 0)):
                 result = result.mirror_x()
@@ -908,7 +1013,16 @@ def _mirror_view(
         source_canvas = base[region.name]
         if region.name == roles.head and params.profile:
             source_canvas = _strip_far_side_face(source_canvas, facing)
-        result = _squash_x(source_canvas, params.squash_num, params.squash_den)
+        # Face-detail regions in true side views: strip far-side content.
+        if region.name in roles.face and params.profile:
+            source_canvas = _strip_far_side_detail(source_canvas, facing)
+        # Per-region squash override (same resolution as _build_view).
+        num, den = params.squash_num, params.squash_den
+        if params.region_squash is not None:
+            cat = _region_squash_category(region.name, roles)
+            if cat is not None and cat in params.region_squash:
+                num, den = params.region_squash[cat]
+        result = _squash_x(source_canvas, num, den)
         far, near = _limb_sets(roles, facing)
         if params.shade_far_limbs and region.name in far:
             result = _remap_colors(result, ramps.rgba_darker)
@@ -916,6 +1030,8 @@ def _mirror_view(
             params.flip_limbs or (region.name not in far and region.name not in near)
         ):
             result = _remap_colors(result, ramps.rgba_flip)
+        if params.shade_far_half:
+            result = _shade_far_half(result, facing, ramps.rgba_darker)
         shift = 0
         if region.name in far:
             shift = -_away_sign(base[region.name]) * params.far_shift

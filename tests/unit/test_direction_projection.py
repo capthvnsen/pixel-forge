@@ -946,3 +946,180 @@ def test_preview_artifacts(doc: SpriteAssetBase, palette: ResolvedPalette) -> No
         assert path.is_file(), name
         with Image.open(path) as img:
             assert img.size[0] % 4 == 0 and img.size[1] % 4 == 0
+
+
+# --- per-region squash: side-view volume (round-2 critic fix) -----------------
+
+
+def test_side_head_keeps_volume_over_global_half(
+    doc: SpriteAssetBase, palette: ResolvedPalette
+) -> None:
+    """The side-view head uses 4/5 squash, keeping >= 3/4 of the front head
+    width (the round-2 critic's biggest gap: global 1/2 squash collapsed the
+    head into a 0.46x cardboard cutout)."""
+    views = project_directions(doc, palette)
+    front_head = views["south"].region("head").canvas.bbox()
+    east_head = views["east"].region("head").canvas.bbox()
+    assert front_head is not None and east_head is not None
+    front_w = front_head[2] - front_head[0]
+    east_w = east_head[2] - east_head[0]
+    # At 4/5 squash the head should keep at least 75% of its front width.
+    assert east_w >= front_w * 3 // 4, (
+        f"side head width {east_w} < 3/4 of front width {front_w} "
+        f"(ratio {east_w / front_w:.2f}, expected >= 0.75)"
+    )
+
+
+def test_side_torso_intermediate_between_head_and_limb(
+    doc: SpriteAssetBase, palette: ResolvedPalette
+) -> None:
+    """The side-view torso uses 2/3 squash -- wider than limbs (1/2) but
+    narrower than the head (4/5).  Verify relative widths."""
+    views = project_directions(doc, palette)
+    front = views["south"]
+    east = views["east"]
+
+    def _width(view: Any, name: str) -> int:
+        bb = view.region(name).canvas.bbox()
+        assert bb is not None
+        return bb[2] - bb[0]
+
+    front_head_w = _width(front, "head")
+    east_head_w = _width(east, "head")
+    front_torso_w = _width(front, "torso")
+    east_torso_w = _width(east, "torso")
+    front_arm_w = _width(front, "arm_right")
+    east_arm_w = _width(east, "arm_right")
+
+    # Head ratio should be the widest (4/5), torso middle (2/3), limbs (2/3 —
+    # the gauntlet's profile legs must not collapse to needle sticks, so limbs
+    # share the torso's 2/3; absolute profile widths still order head > torso
+    # > arm because the authored sizes do).
+    head_ratio = east_head_w / front_head_w
+    torso_ratio = east_torso_w / front_torso_w
+    assert head_ratio > torso_ratio, f"head {head_ratio:.2f} > torso {torso_ratio:.2f}"
+    assert east_torso_w > east_arm_w, f"east torso {east_torso_w}px > east arm {east_arm_w}px"
+
+
+def test_side_view_one_eye_separate_region(doc: SpriteAssetBase, palette: ResolvedPalette) -> None:
+    """The side view shows EXACTLY ONE eye (the near-side one) even when the
+    face region uses a ratio that would keep both eyes.  The far-side eye is
+    stripped explicitly, not relied on to drop via squash."""
+    views = project_directions(doc, palette)
+    eye = _rgba(palette, "eye")
+
+    # Count eye pixels in east and west composites.
+    east_eye_xs: list[int] = []
+    west_eye_xs: list[int] = []
+    arr_e = views["east"].composite(doc.asset.canvas).array
+    arr_w = views["west"].composite(doc.asset.canvas).array
+    for y in range(arr_e.shape[0]):
+        for x in range(arr_e.shape[1]):
+            if tuple(arr_e[y, x]) == eye:
+                east_eye_xs.append(x)
+            if tuple(arr_w[y, x]) == eye:
+                west_eye_xs.append(x)
+
+    # The surviving eye is on the near side of the head centre.
+    head_bbox = views["south"].region("head").canvas.bbox()
+    assert head_bbox is not None
+    centre_x = (head_bbox[0] + head_bbox[2] - 1) // 2
+
+    assert east_eye_xs, "east side view must show an eye"
+    assert all(x > centre_x for x in east_eye_xs), (
+        f"east eye at {east_eye_xs} should be right of centre {centre_x}"
+    )
+    assert west_eye_xs, "west side view must show an eye"
+    assert all(x < centre_x for x in west_eye_xs), (
+        f"west eye at {west_eye_xs} should be left of centre {centre_x}"
+    )
+
+
+def test_side_view_one_eye_embedded(palette: ResolvedPalette) -> None:
+    """Embedded eyes: the side view shows exactly one interior-ink cluster,
+    on the near side of the head centre -- ratio-independent."""
+    doc = _doc(embedded_eyes=True)
+    pal = resolve_palette(doc.palette)
+    ink = _rgba(pal, "ink")
+    views = project_directions(doc, pal)
+    head_bbox = views["south"].region("head").canvas.bbox()
+    assert head_bbox is not None
+    centre2 = head_bbox[0] + head_bbox[2] - 1
+
+    east = _interior_ink(views["east"].region("head").canvas, ink)
+    west = _interior_ink(views["west"].region("head").canvas, ink)
+    assert len(east) == 1, f"east should have 1 embedded eye, got {len(east)}"
+    assert len(west) == 1, f"west should have 1 embedded eye, got {len(west)}"
+    ((ex, ey),) = east
+    ((wx, wy),) = west
+    assert 2 * ex > centre2, f"east eye x={ex} should be > centre/2={centre2}"
+    assert 2 * wx < centre2, f"west eye x={wx} should be < centre/2={centre2}"
+    assert (wx, wy) == (W - 1 - ex, ey)  # west == mirror(east) for the eye
+
+
+def test_side_mirror_symmetry_preserved_with_region_squash(
+    doc: SpriteAssetBase, palette: ResolvedPalette
+) -> None:
+    """west == mirror(east) byte-exact even with per-region squash ratios."""
+    frames = project_frames(doc, palette)
+    assert frames["east"].mirror_x().equals(frames["west"]), (
+        "west must be byte-exact mirror of east with per-region squash"
+    )
+
+
+def test_side_mirror_symmetry_with_ramps() -> None:
+    """Ramped side views stay exact mirrors with per-region squash."""
+    doc = _doc_ramps()
+    palette = resolve_palette(doc.palette)
+    views = project_directions(doc, palette)
+    east = views["east"].composite(doc.asset.canvas)
+    west = views["west"].composite(doc.asset.canvas)
+    assert west.equals(east.mirror_x())
+
+
+def test_south_unchanged_by_region_squash(doc: SpriteAssetBase, palette: ResolvedPalette) -> None:
+    """south (front view) is byte-identical to the authored front -- the
+    region_squash override only applies to views that use it."""
+    layers = plan_layers(doc, doc.regions, doc.anchors, {}, palette)
+    authored = composite(doc.asset.canvas, layers, palette)
+    projected = project_frames(doc, palette)["south"]
+    assert projected.equals(authored)
+
+
+def test_determinism_with_region_squash(doc: SpriteAssetBase, palette: ResolvedPalette) -> None:
+    """project_directions is deterministic with per-region squash overrides."""
+    first = project_frames(doc, palette)
+    second = project_frames(doc, palette)
+    for direction in DIRECTIONS:
+        assert first[direction].equals(second[direction]), direction
+
+
+def test_walk_mirrors_preserved_with_region_squash() -> None:
+    """Animated walk frames: west[i] == mirror(east[i]) with per-region squash."""
+    from pixel_forge.animation.cycles import generate_joint_walk_cycle
+    from pixel_forge.rendering.direction import project_animated_frames
+
+    doc = _doc()
+    palette = resolve_palette(doc.palette)
+    walk = generate_joint_walk_cycle(doc, {})
+    assert len(walk) >= 4
+    animated = project_animated_frames(doc, palette, walk)
+    for a, b in (("west", "east"), ("south_west", "south_east"), ("north_west", "north_east")):
+        for i in range(len(walk)):
+            assert animated[a][i].equals(animated[b][i].mirror_x()), (
+                f"{a}[{i}] is not the mirror of {b}[{i}]"
+            )
+
+
+def test_side_hair_wider_than_half_front(doc: SpriteAssetBase, palette: ResolvedPalette) -> None:
+    """Hair uses 4/5 squash like the head: keeps > 1/2 of front width."""
+    views = project_directions(doc, palette)
+
+    def _region_width(view: Any, name: str) -> int:
+        bbox = view.region(name).canvas.bbox()
+        return bbox[2] - bbox[0] + 1 if bbox else 0
+
+    front_w = _region_width(views["south"], "hair")
+    side_w = _region_width(views["east"], "hair")
+    assert front_w > 0
+    assert side_w > front_w // 2, f"side hair {side_w}px <= half of front {front_w}px"
