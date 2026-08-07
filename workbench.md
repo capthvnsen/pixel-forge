@@ -370,6 +370,71 @@ _Live progress file. Updated as pieces land. Authoritative requirements: HANDOFF
   tiny dark torso — an art-proportion issue; the chibi test character has
   balanced proportions so the gauntlet isolates engine quality.
 
+## Gauntlet Rounds 2-3 (2026-08-07)
+
+- **Round-1 critic: FAIL 3/10** — biggest gap "flat single-tone shading per
+  material". Root causes were import + art, not the projection: max_colors=16
+  cap dropped tones; the chibi art hid its ramps (hair covered forehead +
+  chin; 2px limbs were all-INK from their own selout borders; a ground shadow
+  inflated limb bboxes and disabled the walk's geometry clamps -> 35° leg
+  scissors + frozen arms).
+- **Round-2 fixes (committed 3b07362):** chibi redrawn (3-tone ramps on
+  visible pixels, 3px edge+fill+edge limbs, no shadow); import max_colors=32
+  + explicit 20x32 canvas (the samples' cell size); cycles.py hair region
+  rides the body bob. Verified: south carries 3 skin / 3 shirt / 3+ pants /
+  3 hair tones; arms +-7.2°; legs stay clamped; 1059 green.
+- **Round-2 critic: FAIL 5/10** (up from 3). Ramps VERIFIED present; north
+  (back) 93% of reference width; legs separated + animating. BIGGEST_GAP:
+  side-view profile still a 0.46x cardboard squash (east head max 28px vs
+  ref 76px at x4) — the global 1/2 squash collapses every region.
+  Secondaries: head bob invisible at the top (solid hair cap), skin ramp
+  placement reads flat to vision, arm swing subtle in south.
+- **Round-3 fix IN FLIGHT (Builder -> direction.py):** per-region squash
+  override; _SIDE: head+hair 4/5, torso 2/3, limbs 1/2; far-side eye dropped
+  explicitly at any ratio. Target: side profiles >= 70% of reference width.
+
+## Gauntlet Final Report (2026-08-07, committed c86e9fd)
+
+**Outcome: the loop reached a genuine contest but not a consistent blind-test
+win.** Trajectory: R1 3/10 -> R2 5/10 -> R3 6/10 -> R4 5/10. One blind A/B read
+(R4, labeled montage vs s001) came back "WINNER: SIDE A"; all other reads
+(2 independent critic reads + 3 randomized unlabeled montages) went to the
+reference. The reference's consistent wins land on hand-crafted dimensions the
+move-pixels architecture cannot close: organic rounded-head AA, nose/jaw/ear
+profile contours, 5-6 tone hue-shifted ramps, textured hair, natural
+knee-bend walk mechanics.
+
+**Engine levers landed + verified (all committed):**
+- Per-region side squash (head 4/5, torso 3/4, limbs 2/3) — profiles 0.46x ->
+  0.79x of front width
+- Both limbs in profile with far-limb one-step depth darkening
+  (flip_limbs=False for _SIDE — near limb keeps its authored light) — the
+  side walk's leg scissor is now visible
+- shade_far_half: torso/limb far-side darkening (lit chest, shaded back)
+- _strip_far_side_detail: exactly one eye in profile at any squash ratio
+- Real stride (legs +-8.5 deg), pass-frame body bob (1px, correct phase),
+  hair rides the bob
+- Selout outlines everywhere; chibi art craft passes (rounded head, 2x3
+  expressive eyes, buttoned jacket, grounded shoes, wide stance)
+- Bald + sunglasses variant (the pack's simplest archetype, s005) — also
+  loses on organic form
+- 1069 tests green, mypy + ruff clean, west==mirror(east) byte-exact,
+  south byte-identical, determinism preserved
+
+**Why the ceiling is real:** the engine MOVES authored pixels — every pixel in
+the side views comes from the front-view layers. A profile nose/jaw/ear, a
+wrapped sunglasses lens, an organic dome arc, and a knee-bend are NEW shapes
+that no projection from a front view can synthesize. The samples are
+hand-crafted per-direction art.
+
+**Options to actually WIN the pack:**
+1. SideView input contract (author the profile once, like the samples do) —
+   the next product piece; the projection becomes a preview, not the source
+2. Generative/vision backend behind the RenderBackend seam — can invent
+   profile art, but breaks the determinism contract unless cached/pinned
+3. Keep looping on art craft — diminishing returns; the scoreplateaued at
+   5-6/10 for three rounds despite real improvements
+
 ## Plan (from HANDOFF.md priority order)
 
 | # | Piece | Builder owns (files) | Status | Critic verdict |
