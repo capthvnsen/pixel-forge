@@ -22,6 +22,7 @@ from itertools import pairwise
 from pixel_forge.errors import ForgeError
 from pixel_forge.schemas import RegionTransform
 from pixel_forge.schemas.animation import EasingName, FrameSpec
+from pixel_forge.schemas.common import RotateSpec
 
 EasingFn = Callable[[float], float]
 
@@ -106,6 +107,24 @@ def _lerp_component(a: int, b: int, t: float) -> int:
     return _round_half_away_from_zero(a + (b - a) * t)
 
 
+def _lerp_rotate(
+    a: RotateSpec | None, b: RotateSpec | None, t_eased: float, t_clamped: float
+) -> RotateSpec | None:
+    """Interpolate two rotate specs. The angle lerps linearly (a missing side counts
+    as the identity rotation, angle 0); the pivot snaps like `visible`/`color_swap` —
+    `a`'s for t < 1.0, `b`'s at t == 1.0. Both sides None stays None."""
+    if a is None and b is None:
+        return None
+    a_angle = a.angle_deg if a is not None else 0.0
+    b_angle = b.angle_deg if b is not None else 0.0
+    angle = a_angle + (b_angle - a_angle) * t_eased
+    if t_clamped >= 1.0:
+        pivot = b.pivot if b is not None else None
+    else:
+        pivot = a.pivot if a is not None else None
+    return RotateSpec(angle_deg=angle, pivot=pivot)
+
+
 def lerp_transform(
     a: RegionTransform,
     b: RegionTransform,
@@ -114,7 +133,9 @@ def lerp_transform(
     easing: EasingFn = ease_linear,
 ) -> RegionTransform:
     """Interpolate two transforms. `offset`/`scale_size` round half away from zero;
-    `visible`/`color_swap` snap to `a` for t < 1.0 and to `b` at t == 1.0.
+    `visible`/`color_swap` snap to `a` for t < 1.0 and to `b` at t == 1.0; `rotate`
+    lerps its angle linearly and snaps its pivot on the same rule (see
+    `_lerp_rotate`).
 
     The easing curve is applied to the clamped parameter first: with
     ``ease_bounce`` the offset overshoots past `b` mid-way and settles back — the
@@ -131,6 +152,7 @@ def lerp_transform(
         _lerp_component(a.scale_size[0], b.scale_size[0], t_eased),
         _lerp_component(a.scale_size[1], b.scale_size[1], t_eased),
     )
+    rotate = _lerp_rotate(a.rotate, b.rotate, t_eased, t_clamped)
     if t_clamped >= 1.0:
         visible = b.visible
         color_swap = dict(b.color_swap)
@@ -138,7 +160,11 @@ def lerp_transform(
         visible = a.visible
         color_swap = dict(a.color_swap)
     return RegionTransform(
-        offset=offset, visible=visible, color_swap=color_swap, scale_size=scale_size
+        offset=offset,
+        visible=visible,
+        color_swap=color_swap,
+        scale_size=scale_size,
+        rotate=rotate,
     )
 
 
@@ -223,9 +249,7 @@ def sample_frames(frames: Sequence[FrameSpec], at_ms: int) -> dict[str, RegionTr
     end_ms = cumulative
 
     def pose(index: int) -> dict[str, RegionTransform]:
-        return {
-            region: _frame_transform(frames[index], region) for region in regions
-        }
+        return {region: _frame_transform(frames[index], region) for region in regions}
 
     if at_ms <= starts[0]:
         return pose(0)
@@ -253,9 +277,7 @@ def sample_frames(frames: Sequence[FrameSpec], at_ms: int) -> dict[str, RegionTr
     return pose(len(frames) - 1)  # at_ms inside the last frame's own window
 
 
-def resample_frames(
-    frames: Sequence[FrameSpec], samples_per_frame: int
-) -> list[FrameSpec]:
+def resample_frames(frames: Sequence[FrameSpec], samples_per_frame: int) -> list[FrameSpec]:
     """Densify a `FrameSpec` track for eased rendering.
 
     Each authored frame's window is sampled ``samples_per_frame`` times (its own
@@ -286,9 +308,7 @@ def resample_frames(
         duration = frame.duration_ms
         base, remainder = divmod(duration, samples_per_frame)
         for k in range(samples_per_frame):
-            at_ms = starts[i] + _round_half_away_from_zero(
-                k * duration / samples_per_frame
-            )
+            at_ms = starts[i] + _round_half_away_from_zero(k * duration / samples_per_frame)
             sub_duration = base + (1 if k < remainder else 0)
             result.append(
                 FrameSpec(

@@ -1,0 +1,5 @@
+round-trip: engine-rendered idle/south/0 vs source front layers composited in draw order
+canvas: 17x29
+engine  sha256(rgba): af608ce46622479b4be71c7c37de450ab30131427ca7f6d7a149cf4dc2f6334a
+source  sha256(rgba): af608ce46622479b4be71c7c37de450ab30131427ca7f6d7a149cf4dc2f6334a
+result: EQUAL

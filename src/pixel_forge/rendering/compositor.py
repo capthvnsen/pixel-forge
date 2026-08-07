@@ -9,6 +9,13 @@ on region subsets (mirror-safe vs mirror-unsafe) before compositing them separat
 `bitmap` shapes (and `pixel`/`line`, which have no `size` either). Resampling hand-drawn
 pixel art is not a size delta: silently nearest-scaling it would be worse than doing
 nothing, so bitmaps stay their authored size and any resizing is a re-authoring problem.
+
+`rotate` (a `RotateSpec` on the merged transform) rotates the region's rendered pixels
+about `origin + rotate.pivot` (region-local pivot, default the anchor point itself)
+with `Canvas.rotate` — nearest-neighbour, binary alpha, deterministic integer math.
+The region is drawn onto a full-frame scratch canvas, rotated, then blitted, so a
+rotated region composits exactly like an unrotated one (source-over, layer order).
+Layers without a `rotate` transform take the original direct-draw path unchanged.
 """
 
 from __future__ import annotations
@@ -31,6 +38,7 @@ from pixel_forge.schemas.common import (
     RectShape,
     Region,
     RegionTransform,
+    RotateSpec,
     Shape,
 )
 
@@ -41,6 +49,7 @@ class LayerDraw:
     layer: int
     origin: Vec2  # resolved anchor world position + transform offset
     shapes: tuple[Shape, ...]  # transform-adjusted shapes
+    rotate: RotateSpec | None = None  # joint-pivot rotation about origin + pivot
 
 
 def _apply_color_swap(
@@ -125,10 +134,30 @@ def plan_layers(
             shape = _apply_scale_size(region_name, shape_index, shape, transform.scale_size)
             shapes.append(shape)
         layers.append(
-            LayerDraw(region=region_name, layer=region.layer, origin=origin, shapes=tuple(shapes))
+            LayerDraw(
+                region=region_name,
+                layer=region.layer,
+                origin=origin,
+                shapes=tuple(shapes),
+                rotate=transform.rotate,
+            )
         )
     layers.sort(key=lambda draw: (draw.layer, draw.region))
     return layers
+
+
+def _draw_layer(canvas: Canvas, layer: LayerDraw, palette: ResolvedPalette) -> None:
+    """Draw one layer's shapes onto `canvas` at `layer.origin` (no rotation)."""
+    for shape in layer.shapes:
+        if isinstance(shape, BitmapShape):
+            colors = {char: palette.rgba(color_id) for char, color_id in shape.key.items()}
+            draw_bitmap(canvas, shape, layer.origin, colors)
+        else:
+            draw_shape(canvas, shape, layer.origin, palette.rgba(shape.color))
+
+
+def _rotation_needed(rotate: RotateSpec | None) -> bool:
+    return rotate is not None and rotate.angle_deg % 360.0 != 0.0
 
 
 def composite(canvas_size: Vec2, layers: Sequence[LayerDraw], palette: ResolvedPalette) -> Canvas:
@@ -136,15 +165,27 @@ def composite(canvas_size: Vec2, layers: Sequence[LayerDraw], palette: ResolvedP
 
     Callers are responsible for ordering (`plan_layers` already sorts its output);
     `composite` never reorders. Out-of-canvas shapes clip silently via `Canvas.set_pixel`.
+
+    A layer with a `rotate` transform is drawn onto a full-frame scratch canvas,
+    rotated about `origin + rotate.pivot` (region-local; default the region's anchor
+    point), then blitted source-over — so rotation composits with the same clipping
+    and layering semantics as every other layer. Layers without rotation draw
+    directly, byte-identical to the pre-rotation behaviour.
     """
     canvas = Canvas(*canvas_size)
     for layer in layers:
-        for shape in layer.shapes:
-            if isinstance(shape, BitmapShape):
-                colors = {char: palette.rgba(color_id) for char, color_id in shape.key.items()}
-                draw_bitmap(canvas, shape, layer.origin, colors)
-            else:
-                draw_shape(canvas, shape, layer.origin, palette.rgba(shape.color))
+        if _rotation_needed(layer.rotate):
+            assert layer.rotate is not None
+            scratch = Canvas(*canvas_size)
+            _draw_layer(scratch, layer, palette)
+            pivot = layer.rotate.pivot or (0, 0)
+            rotated = scratch.rotate(
+                (layer.origin[0] + pivot[0], layer.origin[1] + pivot[1]),
+                layer.rotate.angle_deg,
+            )
+            canvas.blit(rotated, (0, 0))
+        else:
+            _draw_layer(canvas, layer, palette)
     return canvas
 
 

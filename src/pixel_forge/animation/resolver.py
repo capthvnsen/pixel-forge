@@ -19,6 +19,7 @@ from pixel_forge.schemas import (
     TerrainAsset,
 )
 from pixel_forge.schemas.animation import EasingName
+from pixel_forge.schemas.common import RotateSpec
 
 
 @dataclass(frozen=True)
@@ -32,8 +33,9 @@ class ResolvedFrame:
     mirrored_from: str | None  # source direction when this one is mirrored
     # Per-region transforms for mirror-*unsafe* regions on a mirrored direction: same
     # as `transforms` except a `direction_overrides` entry *inherited* from the mirror
-    # source (no override authored for this direction) has its offset's x component
-    # negated, since an inherited offset was written describing the source direction.
+    # source (no override authored for this direction) has its offset's x component,
+    # rotation angle, and rotation pivot's x negated, since an inherited transform was
+    # written describing the source direction.
     # Identical to `transforms` whenever overrides weren't inherited. See
     # `rendering.local`'s module docstring for why this exists.
     mirror_unsafe_transforms: Mapping[str, RegionTransform] = field(default_factory=dict)
@@ -52,25 +54,45 @@ class ResolvedTileFrame:
     duration_ms: int
 
 
+def _merge_rotate(base: RotateSpec | None, override: RotateSpec | None) -> RotateSpec | None:
+    """Merge two rotate layers: angles add; the override's pivot wins when set,
+    otherwise the base's pivot is kept. `None` is the identity rotation."""
+    if base is None:
+        return override
+    if override is None:
+        return base
+    return RotateSpec(
+        angle_deg=base.angle_deg + override.angle_deg,
+        pivot=override.pivot if override.pivot is not None else base.pivot,
+    )
+
+
 def merge_transforms(*layers: RegionTransform) -> RegionTransform:
     """Merge transforms lowest to highest precedence, per-field (not whole-object).
 
     `offset` and `scale_size` add component-wise; `visible` takes the highest layer
     that set it (non-None); `color_swap` dicts merge with the higher layer winning
-    per key. Zero layers returns the identity transform.
+    per key; `rotate` angles add with the higher layer's non-None pivot winning
+    (see `_merge_rotate`). Zero layers returns the identity transform.
     """
     offset = (0, 0)
     scale_size = (0, 0)
     visible: bool | None = None
     color_swap: dict[str, str] = {}
+    rotate: RotateSpec | None = None
     for layer in layers:
         offset = (offset[0] + layer.offset[0], offset[1] + layer.offset[1])
         scale_size = (scale_size[0] + layer.scale_size[0], scale_size[1] + layer.scale_size[1])
         if layer.visible is not None:
             visible = layer.visible
         color_swap.update(layer.color_swap)
+        rotate = _merge_rotate(rotate, layer.rotate)
     return RegionTransform(
-        offset=offset, visible=visible, color_swap=color_swap, scale_size=scale_size
+        offset=offset,
+        visible=visible,
+        color_swap=color_swap,
+        scale_size=scale_size,
+        rotate=rotate,
     )
 
 
@@ -119,9 +141,21 @@ def _direction_overrides(
     return overrides, inherited
 
 
-def _negate_offset_x(transform: RegionTransform) -> RegionTransform:
+def _negate_for_mirror(transform: RegionTransform) -> RegionTransform:
+    """Mirror a transform authored for the mirror *source* direction: negate the
+    offset's x component, the rotation angle, and the rotation pivot's x component
+    (region-local), so an inherited override reads correctly on the flipped
+    direction — a forward arm swing stays forward after mirroring."""
     ox, oy = transform.offset
-    return transform.model_copy(update={"offset": (-ox, oy)})
+    update: dict[str, object] = {"offset": (-ox, oy)}
+    if transform.rotate is not None:
+        rotate = transform.rotate
+        pivot = rotate.pivot
+        update["rotate"] = RotateSpec(
+            angle_deg=-rotate.angle_deg,
+            pivot=(-pivot[0], pivot[1]) if pivot is not None else None,
+        )
+    return transform.model_copy(update=update)
 
 
 def _merge_frame_transforms(
@@ -129,7 +163,7 @@ def _merge_frame_transforms(
     overrides: Mapping[str, RegionTransform],
     frame: FrameSpec,
     *,
-    negate_override_offset_x: bool = False,
+    negate_for_mirror: bool = False,
 ) -> Mapping[str, RegionTransform]:
     for region_name in frame.transforms:
         if region_name not in doc.regions:
@@ -139,8 +173,8 @@ def _merge_frame_transforms(
         layers = [RegionTransform()]
         if region_name in overrides:
             override_layer = overrides[region_name]
-            if negate_override_offset_x:
-                override_layer = _negate_offset_x(override_layer)
+            if negate_for_mirror:
+                override_layer = _negate_for_mirror(override_layer)
             layers.append(override_layer)
         if region_name in frame.transforms:
             layers.append(frame.transforms[region_name])
@@ -162,7 +196,7 @@ def _resolve_direction_frames(
         mirror_unsafe_transforms = (
             transforms
             if not inherited
-            else _merge_frame_transforms(doc, overrides, frame, negate_override_offset_x=True)
+            else _merge_frame_transforms(doc, overrides, frame, negate_for_mirror=True)
         )
         resolved.append(
             ResolvedFrame(
@@ -205,7 +239,7 @@ def resolve_sampled_frame(
     mirror_unsafe_transforms = (
         transforms
         if not inherited
-        else _merge_frame_transforms(doc, overrides, spec, negate_override_offset_x=True)
+        else _merge_frame_transforms(doc, overrides, spec, negate_for_mirror=True)
     )
     return ResolvedFrame(
         direction=direction,
@@ -238,9 +272,7 @@ def resolve_frames(doc: SpriteAssetBase) -> list[ResolvedFrame]:
     for animation_name, animation in doc.animations.items():
         frame_specs = resolve_animation_frames(doc, animation)
         for direction in doc.directions:
-            frames.extend(
-                _resolve_direction_frames(doc, animation_name, frame_specs, direction)
-            )
+            frames.extend(_resolve_direction_frames(doc, animation_name, frame_specs, direction))
     return frames
 
 
@@ -256,8 +288,7 @@ def animation_duration_ms(doc: SpriteAssetBase, animation: str) -> int:
     if animation not in doc.animations:
         raise ForgeError(f"unknown animation {animation!r}")
     return sum(
-        frame.duration_ms
-        for frame in resolve_animation_frames(doc, doc.animations[animation])
+        frame.duration_ms for frame in resolve_animation_frames(doc, doc.animations[animation])
     )
 
 

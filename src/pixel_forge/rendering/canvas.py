@@ -17,6 +17,26 @@ from PIL import Image
 Vec2 = tuple[int, int]
 RGBA = tuple[int, int, int, int]
 
+#: Fractional bits (as a scale factor) for `Canvas.rotate`'s fixed-point cos/sin.
+_ROTATE_FIXED_SCALE = 1 << 14
+
+
+def _round_half_away_from_zero(value: float) -> int:
+    if value >= 0:
+        return math.floor(value + 0.5)
+    return math.ceil(value - 0.5)
+
+
+def _fixed_div_round(num: NDArray[np.int64], scale: int) -> NDArray[np.int64]:
+    """`num / scale` rounded to nearest, halves away from zero, pure integer.
+
+    Elementwise over the fixed-point numerator array; both branches of the
+    `np.where` are exact integer floor-division, so the result is identical on
+    every run regardless of evaluation order.
+    """
+    half = scale // 2
+    return np.where(num >= 0, (num + half) // scale, -((-num + half) // scale))
+
 
 class Canvas:
     """A single (h, w, 4) uint8 RGBA raster, origin top-left, initialised transparent."""
@@ -262,9 +282,7 @@ class Canvas:
                 if 4 * (ux * ux + uy * uy) <= t2:
                     self.set_pixel(px, py, rgba)
 
-    def draw_bezier(
-        self, p0: Vec2, p1: Vec2, p2: Vec2, rgba: RGBA, thickness: int = 1
-    ) -> None:
+    def draw_bezier(self, p0: Vec2, p1: Vec2, p2: Vec2, rgba: RGBA, thickness: int = 1) -> None:
         """Quadratic Bezier from `p0` via `p1` to `p2`.
 
         The sample count is fixed and integer: the even count 2 * L (L = integer Manhattan
@@ -279,12 +297,7 @@ class Canvas:
         """
         if thickness < 1:
             return
-        distance = (
-            abs(p1[0] - p0[0])
-            + abs(p1[1] - p0[1])
-            + abs(p2[0] - p1[0])
-            + abs(p2[1] - p1[1])
-        )
+        distance = abs(p1[0] - p0[0]) + abs(p1[1] - p0[1]) + abs(p2[0] - p1[0]) + abs(p2[1] - p1[1])
         n = max(1, int(distance * 2)) | 1  # odd: the midpoint is always sampled
         if n < 2:
             self._stamp_dot(*p0, rgba, thickness)
@@ -442,6 +455,53 @@ class Canvas:
         c = Canvas(self._width, self._height)
         c._array[:] = np.fliplr(self._array)
         return c
+
+    def rotate(self, pivot: Vec2, angle_deg: float) -> Canvas:
+        """New canvas of the same size, contents rotated `angle_deg` about `pivot`.
+
+        Positive angles rotate clockwise in screen coordinates (y down) — the same
+        convention as `draw_arc`. Pixels are lattice points at integer coordinates
+        (the module-wide convention), so the pixel exactly at `pivot` maps to itself
+        at every angle.
+
+        Nearest-neighbour inverse mapping: each destination pixel pulls the source
+        pixel nearest its inverse-rotated position, so only colours already on the
+        canvas appear, alpha stays strictly 0/255, pixels rotated out of bounds are
+        clipped, and vacated pixels stay transparent. The per-pixel decision math is
+        pure integer fixed-point (14 fractional bits): cos/sin are converted to
+        integers once per call, then every pixel maps with integer multiply/add and
+        a round-to-nearest (halves away from zero) division — no float-order
+        variance between runs. Angles that are an exact multiple of 90 use exact
+        integer coefficients, so quarter turns are pixel-exact; `angle_deg` congruent
+        to 0 (mod 360) is a byte-exact identity copy.
+        """
+        result = Canvas(self._width, self._height)
+        angle = angle_deg % 360.0
+        if angle == 0.0:
+            result._array[:] = self._array
+            return result
+        scale = _ROTATE_FIXED_SCALE
+        if angle == 90.0:
+            cos_f, sin_f = 0, scale
+        elif angle == 180.0:
+            cos_f, sin_f = -scale, 0
+        elif angle == 270.0:
+            cos_f, sin_f = 0, -scale
+        else:
+            radians = math.radians(angle)
+            cos_f = _round_half_away_from_zero(math.cos(radians) * scale)
+            sin_f = _round_half_away_from_zero(math.sin(radians) * scale)
+        px, py = pivot
+        h, w = self._height, self._width
+        ys, xs = np.indices((h, w), dtype=np.int64)
+        dx = xs - px
+        dy = ys - py
+        # Inverse rotation by angle: src_offset = R(-a) @ dst_offset.
+        src_x = px + _fixed_div_round(cos_f * dx + sin_f * dy, scale)
+        src_y = py + _fixed_div_round(cos_f * dy - sin_f * dx, scale)
+        valid = (src_x >= 0) & (src_x < w) & (src_y >= 0) & (src_y < h)
+        result._array[ys[valid], xs[valid]] = self._array[src_y[valid], src_x[valid]]
+        return result
 
     def translate(self, offset: Vec2) -> Canvas:
         """New canvas of the same size, contents shifted by offset. The vacated area is

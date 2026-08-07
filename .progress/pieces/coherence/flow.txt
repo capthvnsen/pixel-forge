@@ -1,0 +1,8 @@
+coherence demo: layered front -> import -> 8 dirs -> joint walk
+import  canvas: 31x51, palette 16
+roundtrip sha256: 6bfba44300236ea9d38b01bf772b9ad787a49ba2a8eb333f44b0b4663227a155
+front    sha256: 6bfba44300236ea9d38b01bf772b9ad787a49ba2a8eb333f44b0b4663227a155
+rest     sha256: 04e70dfae28269583f869c83c0917f6b8b38da823684ae2e62ef62a917630850
+walk     sha256: b0c9052c1c8cb0e9438e38e910fd25d51c4661c18dcd4aefddfa0d56a17aa6d5
+determinism: render True, walk True
+validation blocking: False

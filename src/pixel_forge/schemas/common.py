@@ -207,6 +207,27 @@ Shape = Annotated[
 ]
 
 
+class RotateSpec(BaseModel):
+    """A joint-pivot rotation applied to a region's rendered pixels.
+
+    `angle_deg` is in degrees; positive rotates clockwise in screen coordinates
+    (y down) — the same convention as `ArcShape`. `pivot` is the rotation centre
+    in region-local (anchor-relative) coordinates, the same space shape `at`
+    coordinates live in; `None` (the default) means the region's own anchor point,
+    i.e. region-local (0, 0). Anchoring a limb region at its joint (shoulder for
+    arms, hip for legs) therefore makes the default pivot the joint itself.
+
+    Merging (`animation.resolver.merge_transforms`) adds angles and lets the
+    higher-precedence layer's non-None pivot win; mirroring a direction negates
+    both the angle and the pivot's x component, alongside the offset negation.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    angle_deg: float = 0.0
+    pivot: Vec2 | None = None  # region-local; None = the region's anchor point
+
+
 class RegionTransform(BaseModel):
     """A per-frame or per-direction-override delta applied to a region."""
 
@@ -216,6 +237,7 @@ class RegionTransform(BaseModel):
     visible: bool | None = None
     color_swap: dict[str, str] = Field(default_factory=dict)  # palette id -> palette id
     scale_size: Vec2 = (0, 0)  # additive px growth on rect/ellipse sizes
+    rotate: RotateSpec | None = None  # joint-pivot rotation, applied after offset
 
 
 class Region(BaseModel):

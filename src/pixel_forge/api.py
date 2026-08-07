@@ -22,6 +22,9 @@ from dataclasses import replace as _dc_replace
 from pathlib import Path
 from typing import Any, Literal
 
+import numpy as np
+from numpy.typing import NDArray
+from PIL import Image
 from pydantic import BaseModel, ConfigDict
 
 from pixel_forge import templates
@@ -33,6 +36,7 @@ from pixel_forge.domain import (
     load_yaml,
     palette_for_polish,
     resolve_palette,
+    rgba_to_hex,
     safe_join,
     short,
     validate_asset_id,
@@ -254,6 +258,22 @@ class SheetImportResult(BaseModel):
     baseline: int
     palette_size: int
     frame_paths: list[str]
+    dry_run: bool
+
+
+class ImportLayeredResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    asset_id: str
+    canvas: tuple[int, int]
+    spec_path: str
+    regions: list[str]
+    back_regions: list[str]
+    anchors: dict[str, tuple[int, int]]
+    palette_id: str
+    palette_size: int
+    revision: RevisionRecord | None
+    warnings: list[str]
     dry_run: bool
 
 
@@ -900,9 +920,7 @@ def export_godot(
         # tiles: the manifest describes only the declared tile ids (and
         # animation frames), so `build_tileset` never sees `grass.v1` cells.
         godot_cells = {
-            tile_id: cell
-            for tile_id, cell in atlas_cells.items()
-            if tile_id in doc.tiles
+            tile_id: cell for tile_id, cell in atlas_cells.items() if tile_id in doc.tiles
         }
         manifest = build_godot_manifest(
             doc, texture_paths={"atlas": atlas_rel}, spec_hash=spec_hash, atlas_cells=godot_cells
@@ -1362,6 +1380,428 @@ def import_sheet(
         frame_paths=frame_paths,
         dry_run=False,
     )
+
+
+# --- layered-character import (the sprite factory's front door) ---------------------------------
+
+_REQUIRED_FRONT_LAYERS = frozenset(
+    {"torso", "head", "arm_left", "arm_right", "leg_left", "leg_right"}
+)
+_OPTIONAL_LAYERS = frozenset({"weapon", "hair", "shadow", "face"})
+
+# Region z-order (Region.layer), bottom to top, for the front view. Declaration
+# order here is also the draw/iteration order everywhere below. Legs sit under
+# the torso (it overlaps the hips), arms over the torso's sides, head/hair/
+# weapon on top; the shadow is always the bottommost region.
+_FRONT_LAYER_Z: dict[str, int] = {
+    "shadow": -10,
+    "leg_left": 0,
+    "leg_right": 1,
+    "torso": 10,
+    "arm_left": 20,
+    "arm_right": 21,
+    "head": 30,
+    "face": 35,
+    "hair": 40,
+    "weapon": 50,
+}
+# Back view: arms and legs hang BEHIND the torso mass (seen from behind, the
+# torso overlaps the inner thighs and the upper arms), so they sit below
+# `back_torso` — the reverse of the front ordering. A separate z block keeps
+# back regions from interleaving with front ones; they are hidden by default
+# (see import_layered) so this ordering only matters once a later piece renders
+# the back direction.
+_BACK_LAYER_Z: dict[str, int] = {
+    "shadow": 90,
+    "arm_left": 100,
+    "arm_right": 101,
+    "leg_left": 110,
+    "leg_right": 111,
+    "torso": 120,
+    "head": 130,
+    "face": 135,
+    "hair": 140,
+    "weapon": 150,
+}
+
+# Which anchor each region hangs off. Limbs hang off their joint anchor so
+# joint-pivot articulation can rotate a region about its own anchor; `weapon`
+# follows the right shoulder by convention (main hand); `shadow` anchored at
+# `feet` is how the walk-cycle and pose machinery recognise it as static
+# (`animation.cycles._discover_roles`, `revisions.operations`).
+_REGION_ANCHOR: dict[str, str] = {
+    "torso": "root",
+    "head": "head_top",
+    "face": "head_top",
+    "hair": "head_top",
+    "arm_left": "shoulder_left",
+    "arm_right": "shoulder_right",
+    "leg_left": "hip_left",
+    "leg_right": "hip_right",
+    "weapon": "shoulder_right",
+    "shadow": "feet",
+}
+
+# A canvas dimension beyond which the input is almost certainly not a single
+# pixel-art sprite (e.g. an unscaled render). Warned about, never refused.
+_LAYERED_CANVAS_WARN = 128
+
+
+def _opaque_bbox(arr: NDArray[np.uint8]) -> tuple[int, int, int, int] | None:
+    """Half-open `(x0, y0, x1, y1)` bbox of pixels with alpha >= 128 — the same
+    binary opacity threshold `rendering.ingest.png_to_bitmap` imports by, so
+    anchors derived from this bbox agree with the imported bitmap exactly."""
+    ys, xs = np.nonzero(arr[..., 3] >= 128)
+    if xs.size == 0:
+        return None
+    return (int(xs.min()), int(ys.min()), int(xs.max()) + 1, int(ys.max()) + 1)
+
+
+def _palette_from_composites(
+    composites: Sequence[NDArray[np.uint8]], max_colors: int, palette_id: str
+) -> tuple[Palette, int]:
+    """Build a `Palette` from the most frequent opaque colours across composites.
+
+    Same deterministic contract as `rendering.ingest.extract_palette`: alpha is
+    binary (>= 128 opaque), colours are counted per-hex across every composite,
+    ordered by descending pixel count with ties broken by ascending hex string,
+    and capped at `max_colors`. Ids are `c00`, `c01`, ... in that order.
+
+    Returns `(palette, unique_colors)` where `unique_colors` is the total number
+    of distinct opaque colours found *before* the cap — the caller uses it to
+    warn when source art exceeds `max_colors`.
+    """
+    counts: dict[str, int] = {}
+    for arr in composites:
+        opaque = arr[..., 3] >= 128
+        for r, g, b, _a in arr[opaque].tolist():
+            hex_str = rgba_to_hex((r, g, b, 255))
+            counts[hex_str] = counts.get(hex_str, 0) + 1
+    unique_colors = len(counts)
+    ordered = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))[:max_colors]
+    colors = [
+        PaletteColor(id=f"c{i:02d}", hex=hex_str) for i, (hex_str, _count) in enumerate(ordered)
+    ]
+    return Palette(id=palette_id, colors=colors), unique_colors
+
+
+def _composite_binary(
+    placed: Sequence[tuple[NDArray[np.uint8], int, int]], canvas: tuple[int, int]
+) -> NDArray[np.uint8]:
+    """Painter's-algorithm composite of RGBA layers (each at a canvas offset).
+
+    Matches the renderer's semantics exactly — binary alpha (>= 128 opaque),
+    later layers overwrite earlier ones, out-of-canvas pixels clip — so this is
+    the reference the imported spec's rendered frame must equal byte-for-byte.
+    """
+    width, height = canvas
+    out = np.zeros((height, width, 4), dtype=np.uint8)
+    for arr, dx, dy in placed:
+        img_h, img_w = arr.shape[:2]
+        x0, y0 = max(dx, 0), max(dy, 0)
+        x1, y1 = min(dx + img_w, width), min(dy + img_h, height)
+        if x0 >= x1 or y0 >= y1:
+            continue
+        src = arr[y0 - dy : y1 - dy, x0 - dx : x1 - dx]
+        mask = src[..., 3] >= 128
+        target = out[y0:y1, x0:x1]
+        target[mask] = src[mask]
+        target[..., 3] = np.where(mask, 255, target[..., 3])
+    return out
+
+
+def _bbox_center(lo: int, hi: int) -> int:
+    """Centre pixel of the half-open range `[lo, hi)`: the exact midpoint for
+    odd widths, the pixel just past it for even widths. Pure integer math."""
+    return lo + (hi - lo) // 2
+
+
+def _layered_anchors(
+    bboxes: Mapping[str, tuple[int, int, int, int]], canvas: tuple[int, int]
+) -> dict[str, tuple[int, int]]:
+    """Derive the anchor map from the front-layer bboxes (canvas coordinates).
+
+    - `feet`: bottom-centre of the union of both leg bboxes. The walk-cycle
+      generator and the pose/static machinery require an anchor named `feet`.
+    - `hip_left`/`hip_right`: top-centre of each leg bbox — the leg pivot.
+    - `shoulder_left`/`shoulder_right`: top-INNER corner of each arm bbox,
+      "inner" being the vertical edge nearest the canvas centre line — the arm
+      pivot for swing-arm / joint articulation.
+    - `head_top`: top-centre of the head bbox.
+    - `root`: centre of the torso bbox.
+    """
+    torso = bboxes["torso"]
+    head = bboxes["head"]
+    leg_l = bboxes["leg_left"]
+    leg_r = bboxes["leg_right"]
+    legs = (
+        min(leg_l[0], leg_r[0]),
+        min(leg_l[1], leg_r[1]),
+        max(leg_l[2], leg_r[2]),
+        max(leg_l[3], leg_r[3]),
+    )
+    centre_x = canvas[0] // 2
+
+    def shoulder(name: str) -> tuple[int, int]:
+        x0, y0, x1, _y1 = bboxes[name]
+        inner_x = x0 if _bbox_center(x0, x1) >= centre_x else x1 - 1
+        return (inner_x, y0)
+
+    return {
+        "root": (_bbox_center(torso[0], torso[2]), _bbox_center(torso[1], torso[3])),
+        "feet": (_bbox_center(legs[0], legs[2]), legs[3] - 1),
+        "head_top": (_bbox_center(head[0], head[2]), head[1]),
+        "shoulder_left": shoulder("arm_left"),
+        "shoulder_right": shoulder("arm_right"),
+        "hip_left": (_bbox_center(leg_l[0], leg_l[2]), leg_l[1]),
+        "hip_right": (_bbox_center(leg_r[0], leg_r[2]), leg_r[1]),
+    }
+
+
+def import_layered(
+    root: Path,
+    asset_id: str,
+    front_layers: Mapping[str, str | Path],
+    *,
+    back_layers: Mapping[str, str | Path] | None = None,
+    canvas: tuple[int, int] | None = None,
+    max_colors: int = 16,
+    replace: bool = False,
+    timestamp: str,
+    dry_run: bool = False,
+) -> ImportLayeredResult:
+    """Import a layered front-view drawing (one PNG per body part) as a new
+    character asset: one `bitmap` region per layer, a derived palette,
+    synthesized anchors (including the shoulder/hip joint anchors later pieces
+    pivot on), `export.polish: False`, and one `replace_spec` revision.
+
+    `front_layers` must include every required layer (`torso`, `head`,
+    `arm_left`, `arm_right`, `leg_left`, `leg_right`) and may include the
+    optional `weapon`, `hair`, `shadow`, and `face` (a front-only face-detail
+    layer — screen/visor/eyes — that the direction projection strips from
+    back-facing views); any other name raises. Region
+    names match the conventions `animation.cycles._discover_roles` reads, so
+    walk cycles and pose templates work on the imported asset immediately.
+
+    All layer PNGs share one coordinate space (their own pixel coordinates, as
+    a drawing app exports them). `canvas=None` (the default) derives the canvas
+    from the union of the front layers' opaque extents, shifting content so the
+    union's top-left lands at (0, 0); an explicit `canvas` keeps the layers'
+    coordinates verbatim and raises if the front union exceeds it.
+
+    The palette is extracted from the composited front (plus the composited
+    back when supplied), capped at `max_colors`. Because every visible colour
+    comes from the art itself, imports are exact; colours dropped by the cap
+    (or by full occlusion) are reported in `ImportLayeredResult.warnings`.
+
+    Back layers, when supplied, are stored as regions named `back_<layer>`
+    (same anchors and bitmap treatment, a separate z block — see
+    `_BACK_LAYER_Z`) and hidden via `visible: False` transforms on the imported
+    `idle` frame: the current schema has no doc-level region visibility or
+    per-direction shape lists, so frame transforms are the only in-schema way
+    to carry the back view today. Any animation added later must re-hide them
+    (or a schema field must take over — see the module docs).
+
+    Every path is resolved against the project root through `safe_join`; a
+    layer path escaping the project raises `PathSecurityError`. Imported pixels
+    are authored elsewhere, so `export.polish` is forced False: rendering the
+    imported spec's south frame reproduces the alpha-composited front layers
+    byte-for-byte. `dry_run=True` builds and validates the whole spec in memory
+    and writes nothing (no asset, no revision).
+    """
+    project = _project(root)
+    validate_asset_id(asset_id)
+    if not replace and asset_id in project.discover_assets():
+        raise ForgeError(
+            f"asset {asset_id!r} already exists in project at {project.root}; pass "
+            "replace=True to overwrite it"
+        )
+    if max_colors < 1:
+        raise ForgeError(f"import_layered: max_colors must be >= 1, got {max_colors}")
+
+    known = _REQUIRED_FRONT_LAYERS | _OPTIONAL_LAYERS
+    back_layers = back_layers or {}
+    for label, layer_map in (("front", front_layers), ("back", back_layers)):
+        unknown = sorted(set(layer_map) - known)
+        if unknown:
+            raise ForgeError(
+                f"import_layered: unknown {label} layer name(s) {unknown}; valid layer "
+                f"names: {sorted(known)}"
+            )
+    missing = sorted(_REQUIRED_FRONT_LAYERS - set(front_layers))
+    if missing:
+        raise ForgeError(
+            f"import_layered: missing required front layer(s) {missing}; the front view "
+            f"needs all of {sorted(_REQUIRED_FRONT_LAYERS)}"
+        )
+
+    warnings: list[str] = []
+    missing_optional = sorted(_OPTIONAL_LAYERS - set(front_layers))
+    if missing_optional:
+        warnings.append(f"optional front layer(s) not supplied: {missing_optional}")
+
+    front_order = [name for name in _FRONT_LAYER_Z if name in front_layers]
+    back_order = [name for name in _BACK_LAYER_Z if name in back_layers]
+
+    def load_layers(
+        layer_map: Mapping[str, str | Path], order: list[str], label: str
+    ) -> tuple[dict[str, Image.Image], dict[str, tuple[int, int, int, int]]]:
+        images: dict[str, Image.Image] = {}
+        bboxes: dict[str, tuple[int, int, int, int]] = {}
+        for name in order:
+            image = load_image(safe_join(project.root, str(layer_map[name])))
+            bbox = _opaque_bbox(np.array(image, dtype=np.uint8))
+            if bbox is None:
+                raise ForgeError(
+                    f"import_layered: {label} layer {name!r} is fully transparent; "
+                    "there is nothing to import"
+                )
+            images[name] = image
+            bboxes[name] = bbox
+        return images, bboxes
+
+    front_images, front_bboxes = load_layers(front_layers, front_order, "front")
+    back_images, back_bboxes = load_layers(back_layers, back_order, "back")
+
+    ux0 = min(b[0] for b in front_bboxes.values())
+    uy0 = min(b[1] for b in front_bboxes.values())
+    ux1 = max(b[2] for b in front_bboxes.values())
+    uy1 = max(b[3] for b in front_bboxes.values())
+    if canvas is None:
+        dx, dy = -ux0, -uy0
+        canvas_size = (ux1 - ux0, uy1 - uy0)
+    else:
+        if canvas[0] < 1 or canvas[1] < 1:
+            raise ForgeError(f"import_layered: canvas must be >= 1x1, got {canvas}")
+        dx, dy = 0, 0
+        canvas_size = canvas
+        if ux0 < 0 or uy0 < 0 or ux1 > canvas[0] or uy1 > canvas[1]:
+            raise ForgeError(
+                f"import_layered: front layers span ({ux0}, {uy0})-({ux1}, {uy1}), which "
+                f"exceeds the explicit canvas {canvas}; enlarge it or pass canvas=None "
+                "to derive the canvas from the layer extents"
+            )
+    if max(canvas_size) > _LAYERED_CANVAS_WARN:
+        warnings.append(
+            f"canvas {canvas_size} is larger than {_LAYERED_CANVAS_WARN}px in at least "
+            "one dimension; is this a single pixel-art sprite at its intended scale?"
+        )
+    for name, bbox in back_bboxes.items():
+        if (
+            bbox[0] + dx < 0
+            or bbox[1] + dy < 0
+            or bbox[2] + dx > canvas_size[0]
+            or bbox[3] + dy > canvas_size[1]
+        ):
+            warnings.append(
+                f"back layer {name!r} extends beyond the canvas and will clip when rendered"
+            )
+
+    front_composite = _composite_binary(
+        [(np.array(front_images[n], dtype=np.uint8), dx, dy) for n in front_order],
+        canvas_size,
+    )
+    composites = [front_composite]
+    if back_order:
+        composites.append(
+            _composite_binary(
+                [(np.array(back_images[n], dtype=np.uint8), dx, dy) for n in back_order],
+                canvas_size,
+            )
+        )
+    palette, unique_colors = _palette_from_composites(composites, max_colors, f"{asset_id}_palette")
+    if unique_colors > max_colors:
+        warnings.append(
+            f"source art has {unique_colors} unique colours but max_colors={max_colors}; "
+            "the palette keeps the most frequent ones and pixels of the rest are dropped"
+        )
+    resolved_palette = resolve_palette(palette)
+
+    shifted_front = {
+        name: (b[0] + dx, b[1] + dy, b[2] + dx, b[3] + dy) for name, b in front_bboxes.items()
+    }
+    anchors = _layered_anchors(shifted_front, canvas_size)
+
+    regions: dict[str, Any] = {}
+
+    def add_bitmap_region(region_name: str, image: Image.Image, anchor: str, layer_z: int) -> None:
+        bitmap, report = png_to_bitmap(image, resolved_palette, snap=False, trim=True)
+        if report.unmatched:
+            dropped = sum(report.unmatched.values())
+            warnings.append(
+                f"layer {region_name!r}: {dropped} opaque pixel(s) matched no palette "
+                "colour and were dropped (raise max_colors to keep them)"
+            )
+        # Fully-transparent layers were rejected at load time, so a trimmed box
+        # always exists.
+        assert report.trimmed_to is not None
+        ax, ay = anchors[anchor]
+        at = (report.trimmed_to[0] + dx - ax, report.trimmed_to[1] + dy - ay)
+        shape = BitmapShape.model_validate({**bitmap, "at": list(at)})
+        regions[region_name] = {
+            "anchor": anchor,
+            "layer": layer_z,
+            "shapes": [shape.model_dump(mode="json")],
+        }
+
+    for name in front_order:
+        add_bitmap_region(name, front_images[name], _REGION_ANCHOR[name], _FRONT_LAYER_Z[name])
+    for name in back_order:
+        add_bitmap_region(
+            f"back_{name}", back_images[name], _REGION_ANCHOR[name], _BACK_LAYER_Z[name]
+        )
+
+    frame: dict[str, Any] = {"duration_ms": 200}
+    if back_order:
+        frame["transforms"] = {f"back_{name}": {"visible": False} for name in back_order}
+
+    spec: dict[str, Any] = {
+        "schema_version": 1,
+        "asset": {
+            "id": asset_id,
+            "type": "character",
+            "canvas": [canvas_size[0], canvas_size[1]],
+            # ANI001 measures the baseline as the lowest opaque row of the
+            # rendered frame, which is the bottom of the front union (e.g. a
+            # ground shadow can sit below the feet anchor).
+            "baseline_y": uy1 + dy - 1,
+        },
+        "palette": palette.model_dump(mode="json"),
+        "directions": ["south"],
+        "anchors": {name: [x, y] for name, (x, y) in anchors.items()},
+        "regions": regions,
+        "animations": {"idle": {"loop": True, "frames": [frame]}},
+        # Imported pixels are authored elsewhere and must round-trip byte-exact;
+        # the render-polish pass would recolor silhouette edges, so opt out.
+        "export": {"polish": False},
+        "validation": {"palette_limit": max(24, max_colors)},
+    }
+    parse_asset_doc(spec)  # fail here, before anything is written, on a bad spec
+
+    spec_path = _rel(project.root, project.paths.asset_spec(asset_id))
+    result = ImportLayeredResult(
+        asset_id=asset_id,
+        canvas=canvas_size,
+        spec_path=spec_path,
+        regions=front_order,
+        back_regions=[f"back_{name}" for name in back_order],
+        anchors=anchors,
+        palette_id=palette.id,
+        palette_size=len(palette.colors),
+        revision=None,
+        warnings=warnings,
+        dry_run=dry_run,
+    )
+    if dry_run:
+        return result
+
+    project.save_asset(parse_asset_doc(spec))
+    # Mirror import_region: the import lands as one `replace_spec` revision via
+    # update_asset_spec, so it goes through the same revision machinery
+    # (validation, the append-only log) as every other structural edit. The
+    # asset is saved first because that path requires the doc to already exist.
+    record = update_asset_spec(root, asset_id, spec, timestamp=timestamp)
+    return result.model_copy(update={"revision": record})
 
 
 def render_view(
