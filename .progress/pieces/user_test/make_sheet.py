@@ -249,6 +249,13 @@ def main():
     # --- animations ---
     anims = {
         "walk": project_animated_frames(doc, palette, generate_joint_walk_cycle(doc, {})),
+        "run": project_animated_frames(
+            doc,
+            palette,
+            generate_joint_walk_cycle(
+                doc, {"duration_ms": 70, "bob": 2, "lift": 3, "joint_swing": 40}
+            ),
+        ),
         "idle": project_animated_frames(
             doc,
             palette,
