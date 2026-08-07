@@ -22,7 +22,11 @@ SHEETS = OUT / "sheets"
 FRAMES = OUT / "frames"
 CELL = (27, 31)
 GAP = 2
-DIRS = ("north_west", "north", "north_east", "south_east", "west", "east", "south_west", "south")
+# The engine's canonical compass order (direction.py, _COMPASS8) — the sheets
+# pack rows in THIS order, so region_for must index rows by it. (A previous
+# hand-written order put every Godot animation on the wrong row: each
+# direction showed another direction's frames — the "character broke" bug.)
+DIRS = ("north", "north_east", "east", "south_east", "south", "south_west", "west", "north_west")
 
 # frame durations (s) per animation, matching make_sheet.py's FrameSpecs
 DUR = {

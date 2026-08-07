@@ -952,7 +952,7 @@ animations = [
 "duration": 0.1, "texture": SubResource("AtlasTexture_7")
 }],
 "loop": true,
-"name": &"walk_north_west",
+"name": &"walk_north",
 "speed": 1.0
 },
 {
@@ -967,7 +967,7 @@ animations = [
 "duration": 0.1, "texture": SubResource("AtlasTexture_15")
 }],
 "loop": true,
-"name": &"walk_north",
+"name": &"walk_north_east",
 "speed": 1.0
 },
 {
@@ -982,7 +982,7 @@ animations = [
 "duration": 0.1, "texture": SubResource("AtlasTexture_23")
 }],
 "loop": true,
-"name": &"walk_north_east",
+"name": &"walk_east",
 "speed": 1.0
 },
 {
@@ -1012,7 +1012,7 @@ animations = [
 "duration": 0.1, "texture": SubResource("AtlasTexture_39")
 }],
 "loop": true,
-"name": &"walk_west",
+"name": &"walk_south",
 "speed": 1.0
 },
 {
@@ -1027,7 +1027,7 @@ animations = [
 "duration": 0.1, "texture": SubResource("AtlasTexture_47")
 }],
 "loop": true,
-"name": &"walk_east",
+"name": &"walk_south_west",
 "speed": 1.0
 },
 {
@@ -1042,7 +1042,7 @@ animations = [
 "duration": 0.1, "texture": SubResource("AtlasTexture_55")
 }],
 "loop": true,
-"name": &"walk_south_west",
+"name": &"walk_west",
 "speed": 1.0
 },
 {
@@ -1057,7 +1057,7 @@ animations = [
 "duration": 0.1, "texture": SubResource("AtlasTexture_63")
 }],
 "loop": true,
-"name": &"walk_south",
+"name": &"walk_north_west",
 "speed": 1.0
 },
 {
@@ -1072,7 +1072,7 @@ animations = [
 "duration": 0.07, "texture": SubResource("AtlasTexture_71")
 }],
 "loop": true,
-"name": &"run_north_west",
+"name": &"run_north",
 "speed": 1.0
 },
 {
@@ -1087,7 +1087,7 @@ animations = [
 "duration": 0.07, "texture": SubResource("AtlasTexture_79")
 }],
 "loop": true,
-"name": &"run_north",
+"name": &"run_north_east",
 "speed": 1.0
 },
 {
@@ -1102,7 +1102,7 @@ animations = [
 "duration": 0.07, "texture": SubResource("AtlasTexture_87")
 }],
 "loop": true,
-"name": &"run_north_east",
+"name": &"run_east",
 "speed": 1.0
 },
 {
@@ -1132,7 +1132,7 @@ animations = [
 "duration": 0.07, "texture": SubResource("AtlasTexture_103")
 }],
 "loop": true,
-"name": &"run_west",
+"name": &"run_south",
 "speed": 1.0
 },
 {
@@ -1147,7 +1147,7 @@ animations = [
 "duration": 0.07, "texture": SubResource("AtlasTexture_111")
 }],
 "loop": true,
-"name": &"run_east",
+"name": &"run_south_west",
 "speed": 1.0
 },
 {
@@ -1162,7 +1162,7 @@ animations = [
 "duration": 0.07, "texture": SubResource("AtlasTexture_119")
 }],
 "loop": true,
-"name": &"run_south_west",
+"name": &"run_west",
 "speed": 1.0
 },
 {
@@ -1177,7 +1177,7 @@ animations = [
 "duration": 0.07, "texture": SubResource("AtlasTexture_127")
 }],
 "loop": true,
-"name": &"run_south",
+"name": &"run_north_west",
 "speed": 1.0
 },
 {
@@ -1186,7 +1186,7 @@ animations = [
 "duration": 0.25, "texture": SubResource("AtlasTexture_129")
 }],
 "loop": true,
-"name": &"idle_north_west",
+"name": &"idle_north",
 "speed": 1.0
 },
 {
@@ -1195,7 +1195,7 @@ animations = [
 "duration": 0.25, "texture": SubResource("AtlasTexture_131")
 }],
 "loop": true,
-"name": &"idle_north",
+"name": &"idle_north_east",
 "speed": 1.0
 },
 {
@@ -1204,7 +1204,7 @@ animations = [
 "duration": 0.25, "texture": SubResource("AtlasTexture_133")
 }],
 "loop": true,
-"name": &"idle_north_east",
+"name": &"idle_east",
 "speed": 1.0
 },
 {
@@ -1222,7 +1222,7 @@ animations = [
 "duration": 0.25, "texture": SubResource("AtlasTexture_137")
 }],
 "loop": true,
-"name": &"idle_west",
+"name": &"idle_south",
 "speed": 1.0
 },
 {
@@ -1231,7 +1231,7 @@ animations = [
 "duration": 0.25, "texture": SubResource("AtlasTexture_139")
 }],
 "loop": true,
-"name": &"idle_east",
+"name": &"idle_south_west",
 "speed": 1.0
 },
 {
@@ -1240,7 +1240,7 @@ animations = [
 "duration": 0.25, "texture": SubResource("AtlasTexture_141")
 }],
 "loop": true,
-"name": &"idle_south_west",
+"name": &"idle_west",
 "speed": 1.0
 },
 {
@@ -1249,7 +1249,7 @@ animations = [
 "duration": 0.25, "texture": SubResource("AtlasTexture_143")
 }],
 "loop": true,
-"name": &"idle_south",
+"name": &"idle_north_west",
 "speed": 1.0
 },
 {
@@ -1262,7 +1262,7 @@ animations = [
 "duration": 0.12, "texture": SubResource("AtlasTexture_149")
 }],
 "loop": false,
-"name": &"jump_north_west",
+"name": &"jump_north",
 "speed": 1.0
 },
 {
@@ -1275,7 +1275,7 @@ animations = [
 "duration": 0.12, "texture": SubResource("AtlasTexture_155")
 }],
 "loop": false,
-"name": &"jump_north",
+"name": &"jump_north_east",
 "speed": 1.0
 },
 {
@@ -1288,7 +1288,7 @@ animations = [
 "duration": 0.12, "texture": SubResource("AtlasTexture_161")
 }],
 "loop": false,
-"name": &"jump_north_east",
+"name": &"jump_east",
 "speed": 1.0
 },
 {
@@ -1314,7 +1314,7 @@ animations = [
 "duration": 0.12, "texture": SubResource("AtlasTexture_173")
 }],
 "loop": false,
-"name": &"jump_west",
+"name": &"jump_south",
 "speed": 1.0
 },
 {
@@ -1327,7 +1327,7 @@ animations = [
 "duration": 0.12, "texture": SubResource("AtlasTexture_179")
 }],
 "loop": false,
-"name": &"jump_east",
+"name": &"jump_south_west",
 "speed": 1.0
 },
 {
@@ -1340,7 +1340,7 @@ animations = [
 "duration": 0.12, "texture": SubResource("AtlasTexture_185")
 }],
 "loop": false,
-"name": &"jump_south_west",
+"name": &"jump_west",
 "speed": 1.0
 },
 {
@@ -1353,7 +1353,7 @@ animations = [
 "duration": 0.12, "texture": SubResource("AtlasTexture_191")
 }],
 "loop": false,
-"name": &"jump_south",
+"name": &"jump_north_west",
 "speed": 1.0
 },
 {
@@ -1365,7 +1365,7 @@ animations = [
 "duration": 0.1, "texture": SubResource("AtlasTexture_196")
 }],
 "loop": false,
-"name": &"swing_north_west",
+"name": &"swing_north",
 "speed": 1.0
 },
 {
@@ -1377,7 +1377,7 @@ animations = [
 "duration": 0.1, "texture": SubResource("AtlasTexture_201")
 }],
 "loop": false,
-"name": &"swing_north",
+"name": &"swing_north_east",
 "speed": 1.0
 },
 {
@@ -1389,7 +1389,7 @@ animations = [
 "duration": 0.1, "texture": SubResource("AtlasTexture_206")
 }],
 "loop": false,
-"name": &"swing_north_east",
+"name": &"swing_east",
 "speed": 1.0
 },
 {
@@ -1413,7 +1413,7 @@ animations = [
 "duration": 0.1, "texture": SubResource("AtlasTexture_216")
 }],
 "loop": false,
-"name": &"swing_west",
+"name": &"swing_south",
 "speed": 1.0
 },
 {
@@ -1425,7 +1425,7 @@ animations = [
 "duration": 0.1, "texture": SubResource("AtlasTexture_221")
 }],
 "loop": false,
-"name": &"swing_east",
+"name": &"swing_south_west",
 "speed": 1.0
 },
 {
@@ -1437,7 +1437,7 @@ animations = [
 "duration": 0.1, "texture": SubResource("AtlasTexture_226")
 }],
 "loop": false,
-"name": &"swing_south_west",
+"name": &"swing_west",
 "speed": 1.0
 },
 {
@@ -1449,7 +1449,7 @@ animations = [
 "duration": 0.1, "texture": SubResource("AtlasTexture_231")
 }],
 "loop": false,
-"name": &"swing_south",
+"name": &"swing_north_west",
 "speed": 1.0
 }
 ]
