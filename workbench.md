@@ -462,6 +462,32 @@ confidence — the gap is ~3 rubric points concentrated in depth/walk/shading/
 outlines/proportions, all hand-craft dimensions. The single-input projection
 engine cannot close them; authored side views can.
 
+## Gauntlet Meta Round 2 (2026-08-07, committed b849e93)
+
+**The formal judge found a REAL bug:** the round-6 rubric kept flagging
+"identical leg colors" despite the two-step depth map. Forensics traced it to
+the PANTS RAMP BEING SILENTLY DEAD since round 5:
+- The pants were desaturated grey-blue (sat ~0.1); the hue estimator on
+  near-grey colors is noisy (MID measured 218°, LO 227°) -> the ramp family
+  SPLIT -> no pants family -> darker/lighter maps no-op'd on the legs
+- PANTS_HI (1px thigh light) was dropped by the import's frequency dedup,
+  leaving a 2-member family whose lighter map self-maps (no-op)
+- FIX (art): warm brown-grey pants (the samples' convention — stable hues,
+  family infers) + 2px-wide thigh light (PANTS_HI survives import)
+- VERIFIED: east pass frame far leg = PANTS_LO (92,64,52) vs near leg =
+  PANTS_HI (178,146,130); L* ~63 vs ~30 (the full ramp span); 6x crop read
+  "right leg visibly much lighter warm tan, left leg clearly darker deep
+  brown"; mirrors byte-exact; 1069 green
+
+**The judge is stable but STYLE-ANCHORED (meta-finding):** 3/3 reads to the
+reference, scores ~8.5 vs ~3.8, but the judge's critiques contradict the
+pixels — it called the warm-brown pants "dark blue/black" and the tan-vs-
+espresso legs "identical flat dark pixels" (both disproven at 6x zoom). The
+judge has a stable aesthetic prior (soft/organic > blocky/geometric) that
+dominates its scores; pixel-level fixes to depth/shading no longer move it.
+The real remaining gap is the STYLE (rounded AA forms, richer ramps, organic
+silhouettes), not specific mechanics — which is the hand-craft ceiling.
+
 ## Plan (from HANDOFF.md priority order)
 
 | # | Piece | Builder owns (files) | Status | Critic verdict |
