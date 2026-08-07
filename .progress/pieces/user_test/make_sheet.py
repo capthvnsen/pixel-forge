@@ -184,24 +184,17 @@ def pack_sheet(animated, canvas_size, gap=2, x4=True):
     rows = list(animated.keys())
     cols = len(animated[rows[0]])
     w, h = canvas_size
-    sheet = (
-        Canvas(4 * w + 5 * gap, 2 * h + 3 * gap)
-        if len(rows) == 8
-        else Canvas(cols * w + (cols + 1) * gap, len(rows) * h + (len(rows) + 1) * gap)
-    )
     if len(rows) == 8:
-        # 8 directions in two rows: [NW N NE SE; W E SW S] like the demo
-        layout = [
-            ["north_west", "north", "north_east", "south_east"],
-            ["west", "east", "south_west", "south"],
-        ]
-        for r, dirs in enumerate(layout):
-            for col, d in enumerate(dirs):
-                for fi, frame in enumerate(animated[d]):
-                    x = gap + (col * 4 + fi) * (w + gap)
-                    y = gap + r * (h + gap)
-                    sheet.blit(frame, (x, y))
+        # 8 directions, one row each, all frames left-to-right. (The previous
+        # 2-row layout sized the sheet for 4 frames per direction but blitted
+        # all 8, silently clipping every frame past the 4th and most
+        # directions — the "character broke" bug.)
+        sheet = Canvas(cols * w + (cols + 1) * gap, 8 * h + 9 * gap)
+        for r, d in enumerate(rows):
+            for fi, frame in enumerate(animated[d]):
+                sheet.blit(frame, (gap + fi * (w + gap), gap + r * (h + gap)))
     else:
+        sheet = Canvas(cols * w + (cols + 1) * gap, len(rows) * h + (len(rows) + 1) * gap)
         for r, d in enumerate(rows):
             for fi, frame in enumerate(animated[d]):
                 sheet.blit(frame, (gap + fi * (w + gap), gap + r * (h + gap)))

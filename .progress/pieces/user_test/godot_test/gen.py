@@ -22,10 +22,6 @@ SHEETS = OUT / "sheets"
 FRAMES = OUT / "frames"
 CELL = (27, 31)
 GAP = 2
-LAYOUT = [
-    ["north_west", "north", "north_east", "south_east"],
-    ["west", "east", "south_west", "south"],
-]
 DIRS = ("north_west", "north", "north_east", "south_east", "west", "east", "south_west", "south")
 
 # frame durations (s) per animation, matching make_sheet.py's FrameSpecs
@@ -113,15 +109,12 @@ def build_1x_sheets() -> dict[str, Path]:
 
 
 def region_for(sheet_name: str, direction: str, frame: int) -> tuple[int, int, int, int]:
-    """(x, y, w, h) region of `direction`'s `frame` in the 2-row sheet layout."""
-    del sheet_name
-    for r, dirs in enumerate(LAYOUT):
-        for c, d in enumerate(dirs):
-            if d == direction:
-                x = GAP + (c * 4 + frame) * (CELL[0] + GAP)
-                y = GAP + r * (CELL[1] + GAP)
-                return (x, y, *CELL)
-    raise KeyError(direction)
+    """(x, y, w, h) region of `direction`'s `frame` in the 8-row sheet layout
+    (one direction per row, frames left-to-right — must match pack_sheet)."""
+    row = DIRS.index(direction)
+    x = GAP + frame * (CELL[0] + GAP)
+    y = GAP + row * (CELL[1] + GAP)
+    return (x, y, *CELL)
 
 
 def write_spriteframes(sheets: dict[str, Path]) -> Path:
