@@ -844,6 +844,20 @@ def generate_joint_walk_cycle(
             doc, roles.arm_left, roles.arm_right, joint_swing * 0.6, doc.asset.canvas[0]
         )
     frames: list[FrameSpec] = []
+    # Proportional foot lift: the passing foot should TUCK (a ~1px lift per
+    # 6px of leg), not step onto an invisible stair. The demo's 14px legs keep
+    # the full 2px; the chibi's short 9px legs get 1px — the round-5 gauntlet
+    # read called the old 2px lift on short legs "lifting straight up into the
+    # torso". Falls back to the requested lift when the geometry is unreadable.
+    lift_eff = lift
+    if roles.leg_right is not None:
+        leg_spec = doc.regions.get(roles.leg_right)
+        if leg_spec is not None:
+            _geom = _region_geometry(leg_spec)
+            if _geom is not None:
+                _len = _geom[1]
+                if _len > 0:
+                    lift_eff = max(1, min(lift, _len // 6))
     for i in range(frame_count):
         phase = 2.0 * math.pi * i / frame_count
         sin_p = math.sin(phase)
@@ -870,7 +884,7 @@ def generate_joint_walk_cycle(
             if abs(leg_l_angle) < 1e-9:
                 leg_l_angle = 0.0
                 leg_r_angle = 0.0
-            swing_sq = lift * sin_p * sin_p
+            swing_sq = lift_eff * sin_p * sin_p
             lift_l = -_round_half_away_from_zero(swing_sq) if sin_p < 0 else 0
             lift_r = -_round_half_away_from_zero(swing_sq) if sin_p > 0 else 0
             transforms[roles.leg_left] = RegionTransform(
