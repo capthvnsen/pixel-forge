@@ -324,6 +324,26 @@ _Live progress file. Updated as pieces land. Authoritative requirements: HANDOFF
     panel + centered blits) — rest_sheet 808->616px wide, walk 1608->1224,
     consistent cell offsets, no clipping.
 
+## Round 10 (2026-08-07)
+
+- **Round-9 fresh critic verdict: PASS 7.5/10** — the first PASS across rounds
+  3-9. Both round-9 fixes pixel-verified closed (arm clamp: hands x∈[2,29] all
+  8 frames, anti-phase, loop delta 0, boots never fuse; sheet packing: tight
+  36x56 panels, cell center axis x=19 / feet y=55 in ALL 72 cells -> grid
+  slicing gives direction-independent anchors). Gates immaculate (1059,
+  deterministic, zero holes, mirrors byte-exact, south palette-pure). Blind
+  A/B still loses to the LPC reference on craft (blocky vs organic — the
+  out-of-scope head-silhouette + art-craft frontier).
+- **Art lever applied post-PASS (critic-sanctioned):** arms moved 1px inward
+  (arm_left x=12, arm_right x=33) so the geometry arm clamp unlocks a visible
+  swing — arm angles 8.213° (was 4.096°), hand travel ~2.5px/side (was 1px),
+  still inside the canvas. Gates re-verified green.
+- **MILESTONE COMMITTED + PUSHED:** commit f4bb6af
+  ("feat: single-input sprite factory — 8-direction projection, joint walk,
+  ramp shading (critic PASS 7.5/10)") — everything incl. workbench.md and the
+  .progress/ demo + user-test pipeline; pushed dfb0761..f4bb6af to
+  github.com/capthvnsen/pixel-forge (main).
+
 ## Plan (from HANDOFF.md priority order)
 
 | # | Piece | Builder owns (files) | Status | Critic verdict |
