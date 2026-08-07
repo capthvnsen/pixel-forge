@@ -394,10 +394,9 @@ def test_animated_frames_color_swap(doc: SpriteAssetBase, palette: ResolvedPalet
     pack = rp.rgba("pack")
     # south still carries arm_left, so the swap shows there...
     assert pack in animated["south"][0].colors()
-    # ...but east occludes the far-side arm entirely, so the swap no-ops: the
-    # transform references a region the side view never projects.
-    assert pack not in animated["east"][0].colors()
-    assert rp.rgba("sleeve_l") not in animated["east"][0].colors()
+    # ...and east keeps BOTH arms now (round-4 gauntlet: the far pair is
+    # shaded darker, not occluded), so the swap applies there too.
+    assert pack in animated["east"][0].colors()
 
 
 def test_animated_frames_scale_size_ignored(doc: SpriteAssetBase, palette: ResolvedPalette) -> None:

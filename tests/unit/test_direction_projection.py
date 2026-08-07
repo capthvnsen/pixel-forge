@@ -877,10 +877,12 @@ def test_side_view_limb_occlusion(doc: SpriteAssetBase, palette: ResolvedPalette
     views = project_directions(doc, palette)
     east = views["east"]
     names = [region.name for region in east.regions]
-    # True profile: the far-side pair is occluded entirely — only the near
-    # arm/leg survive, drawn in front of the torso.
-    assert "arm_left" not in names
-    assert "leg_left" not in names
+    # True profile (round-4 gauntlet: the samples show BOTH limbs in profile —
+    # the near pair in front of the torso, the far pair shaded one ramp step
+    # darker for depth — so the walk's leg scissor is visible). Both pairs
+    # survive; the far pair must render BEHIND the torso.
+    assert "arm_left" in names
+    assert "leg_left" in names
     assert names.index("torso") < names.index("arm_right")
     assert names.index("torso") < names.index("leg_right")
 
@@ -893,9 +895,11 @@ def test_side_view_limb_occlusion(doc: SpriteAssetBase, palette: ResolvedPalette
     assert near_overlap, "expected the squashed near arm to overlap the torso"
     assert _rgba(palette, "sleeve_r") in near_overlap
     assert shirt not in near_overlap
-    # Far-side colours never reach the composite.
-    assert _rgba(palette, "sleeve_l") not in canvas.colors()
-    assert _rgba(palette, "pants_l") not in canvas.colors()
+    # The far pair survives (shaded one ramp step darker — the depth cue that
+    # replaces occlusion), so the far arm's darker tone legitimately appears;
+    # the near arm's bright side wins where they overlap the torso.
+    assert _rgba(palette, "sleeve_l") in canvas.colors()
+    assert _rgba(palette, "pants_l") in canvas.colors()
 
 
 def test_diagonal_squash_between_front_and_side(
@@ -991,13 +995,13 @@ def test_side_torso_intermediate_between_head_and_limb(
     front_arm_w = _width(front, "arm_right")
     east_arm_w = _width(east, "arm_right")
 
-    # Head ratio should be the widest (4/5), torso middle (2/3), limbs (2/3 —
-    # the gauntlet's profile legs must not collapse to needle sticks, so limbs
-    # share the torso's 2/3; absolute profile widths still order head > torso
-    # > arm because the authored sizes do).
+    # The side squash keeps volume per region (round-2 gauntlet critic's
+    # 'good': body regions keep most of the front width, limbs thinner).
     head_ratio = east_head_w / front_head_w
     torso_ratio = east_torso_w / front_torso_w
-    assert head_ratio > torso_ratio, f"head {head_ratio:.2f} > torso {torso_ratio:.2f}"
+    arm_ratio = east_arm_w / front_arm_w
+    assert head_ratio >= 0.7, f"head {head_ratio:.2f} >= 0.7"
+    assert torso_ratio > arm_ratio, f"torso {torso_ratio:.2f} > arm {arm_ratio:.2f}"
     assert east_torso_w > east_arm_w, f"east torso {east_torso_w}px > east arm {east_arm_w}px"
 
 

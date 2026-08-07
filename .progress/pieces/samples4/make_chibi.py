@@ -160,12 +160,12 @@ def draw_layers() -> dict[str, Image.Image]:
     # ============ LEGS (4px wide, WIDE stance, COMPACT — rows 21-30) ============
     for side, x in (("leg_left", 4), ("leg_right", 13)):
         leg = layers[side]
-        _rect(leg, x + 1, 21, x + 2, 25, PANTS_MID)   # 2px fill (5px pants — chibi short legs)
-        _px(leg, x + 1, 21, PANTS_HI)                 # thigh light
-        _rect(leg, x + 1, 26, x + 2, 26, PANTS_LO)    # knee shadow
-        _rect(leg, x + 1, 27, x + 2, 30, SHOE)        # shoe (4px tall — grounded)
+        _rect(leg, x + 1, 21, x + 2, 25, PANTS_MID)  # 2px fill (5px pants — chibi short legs)
+        _px(leg, x + 1, 21, PANTS_HI)  # thigh light
+        _rect(leg, x + 1, 26, x + 2, 26, PANTS_LO)  # knee shadow
+        _rect(leg, x + 1, 27, x + 2, 30, SHOE)  # shoe (4px tall — grounded)
         _px(leg, x + 1, 27, SHOE_HI)
-        for y in range(21, 31):                       # selout pants + shoe
+        for y in range(21, 31):  # selout pants + shoe
             _px(leg, x, y, PANTS_EDGE if y < 27 else SHOE_EDGE)
             _px(leg, x + 3, y, PANTS_EDGE if y < 27 else SHOE_EDGE)
         _px(leg, x, 30, SHOE_EDGE)

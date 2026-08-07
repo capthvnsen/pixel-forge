@@ -248,14 +248,16 @@ def test_mirrored_views_record_flipped_pivots() -> None:
 
 
 def test_side_views_occlude_far_limbs() -> None:
-    """True side views (east/west) hide the far-side limbs entirely so the
-    profile shows exactly one arm + one leg: east drops the *_left pair, west
-    (its exact mirror) drops the same pair. Front and diagonal views keep both
-    pairs. Colour level: the round-6 light-side flip (hi<->lo) legitimately
-    carries the far pair's fill colours into the side composites (the near
-    arm's sleeve_r flips to sleeve_l, the near leg's pants_r to pants_l), so
-    the occlusion proof is the region list + palette discipline + byte-exact
-    mirroring, not colour absence."""
+    """True side views (east/west) keep BOTH limb pairs so the walk's leg
+    scissor is visible in profile (round-4 gauntlet: the samples show the far
+    leg darker, not hidden — the reference's side rows have a 16px x4 width
+    range across frames). The far pair is shaded one ramp step darker (depth
+    cue) and renders BEHIND the torso; the near pair in front. West stays the
+    exact byte mirror of east. Front and diagonal views keep both pairs.
+    Colour level: the round-6 light-side flip (hi<->lo) legitimately carries
+    the far pair's fill colours into the side composites, so the depth proof
+    is the region list + palette discipline + byte-exact mirroring, not
+    colour absence."""
     doc = _doc()
     palette = resolve_palette(doc.palette)
     views = project_directions(doc, palette)
@@ -264,13 +266,11 @@ def test_side_views_occlude_far_limbs() -> None:
         return {r.name for r in views[direction].regions}
 
     east, west = names("east"), names("west")
-    # Far pair absent, exactly one arm and one leg survive per side.
-    assert not {"arm_left", "leg_left"} & east
-    assert not {"arm_left", "leg_left"} & west  # west is the mirror of east
-    assert {"arm_right", "leg_right"} <= east
-    assert {"arm_right", "leg_right"} <= west
-    assert len({"arm_left", "arm_right"} & east) == 1
-    assert len({"leg_left", "leg_right"} & east) == 1
+    # Both pairs survive in the side views (far pair shaded, not occluded).
+    assert {"arm_left", "leg_left", "arm_right", "leg_right"} <= east
+    assert {"arm_left", "leg_left", "arm_right", "leg_right"} <= west
+    assert len({"arm_left", "arm_right"} & east) == 2
+    assert len({"leg_left", "leg_right"} & east) == 2
     # Front + all diagonals keep both pairs.
     for direction in ("south", "south_east", "south_west", "north_east", "north_west"):
         assert {"arm_left", "arm_right", "leg_left", "leg_right"} <= names(direction), direction
