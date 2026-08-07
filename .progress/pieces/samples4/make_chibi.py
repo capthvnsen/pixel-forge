@@ -33,10 +33,10 @@ SHIRT_LO = (132, 28, 48, 255)  # cool maroon shadow (hue shift, sample style)
 SHIRT_EDGE = (84, 16, 30, 255)  # dark maroon selout
 GOLD = (232, 186, 96, 255)  # jacket buttons
 GOLD_EDGE = (150, 108, 44, 255)
-PANTS_HI = (110, 118, 134, 255)
-PANTS_MID = (82, 88, 102, 255)
-PANTS_LO = (50, 54, 68, 255)  # cooler shadow
-PANTS_EDGE = (26, 28, 36, 255)
+PANTS_HI = (150, 158, 172, 255)  # light warm-grey (near leg pops)
+PANTS_MID = (120, 128, 142, 255)
+PANTS_LO = (66, 70, 84, 255)  # darker shadow (far leg depth cue)
+PANTS_EDGE = (32, 34, 42, 255)
 SHOE = (58, 52, 62, 255)
 SHOE_HI = (92, 84, 98, 255)
 SHOE_EDGE = (22, 20, 26, 255)
@@ -98,9 +98,12 @@ def draw_layers() -> dict[str, Image.Image]:
     _rect(hair, 15, 6, 16, 7, HAIR_MID)
     _rect(hair, 3, 10, 4, 11, HAIR_MID)
     _rect(hair, 15, 10, 16, 11, HAIR_MID)
-    # selout the dome + curtains
+    # selout the dome + curtains — the TOP edge is a highlight bar (the
+    # samples' hair crowns are lit, not black-rimmed)
     for x in range(4, 16):
-        _px(hair, x, 0, HAIR_EDGE)
+        _px(hair, x, 0, HAIR_HI)
+    _px(hair, 5, 1, HAIR_HI)
+    _px(hair, 14, 1, HAIR_HI)
     _px(hair, 3, 4, HAIR_EDGE)
     _px(hair, 16, 4, HAIR_EDGE)
     _px(hair, 3, 8, HAIR_EDGE)

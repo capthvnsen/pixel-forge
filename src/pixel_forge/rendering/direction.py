@@ -338,7 +338,7 @@ _SIDE = _ViewParams(
     occlude_far_limbs=False,
     shade_far_limbs=True,
     flip_light_side=True,
-    flip_limbs=True,
+    flip_limbs=False,
     region_squash={
         "head": (4, 5),
         "hair": (4, 5),

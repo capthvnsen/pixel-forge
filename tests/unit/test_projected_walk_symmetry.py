@@ -282,8 +282,11 @@ def test_side_views_occlude_far_limbs() -> None:
     west_px = views["west"].composite(doc.asset.canvas)
     for direction, px in (("east", east_px), ("west", west_px)):
         assert px.colors() <= allowed, direction
-    assert palette.rgba("sleeve_l") in east_px.colors()  # flipped near arm
-    assert palette.rgba("sleeve_r") not in east_px.colors()
+    # Round-4 gauntlet: side limbs are NOT flipped (flip_limbs=False) — the
+    # near limb keeps its authored light so the far limb's one-step-darkening
+    # reads as depth (near light / far dark). The body regions still flip.
+    assert palette.rgba("sleeve_r") in east_px.colors()  # near arm keeps its tone
+    assert palette.rgba("pants_r") in east_px.colors()  # near leg keeps its tone
     # The fixture's 3px legs sit on odd columns that the even-width 1/2 squash
     # never samples, so no leg fill colour survives the side views at all —
     # leg coverage is proven by region presence + the walk-frame mirrors above.
