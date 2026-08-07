@@ -344,6 +344,32 @@ _Live progress file. Updated as pieces land. Authoritative requirements: HANDOFF
   .progress/ demo + user-test pipeline; pushed dfb0761..f4bb6af to
   github.com/capthvnsen/pixel-forge (main).
 
+## 4-Direction Sample Gauntlet (2026-08-07, NEW REFERENCE)
+
+- **User direction change:** settle on 4 directions (south/west/east/north),
+  match the quality of the Jephed sample pack (/Users/alex/Downloads/2D Top
+  Down Pixel Art Characters.zip — 40 top-down character sheets, 20x32 cells,
+  4 rows = down/left/right/up, 3-frame walk, chibi ~2.5 heads, 3-4 tone selout
+  shading, dark 1px outlines). User feedback on the robot sheets: "torso is
+  missing, side angles are a little squished".
+- **Reference extracted:** /tmp/pf_refs4/s000_ref.png + s001/s005 (x4
+  montages, sliced per the Reference.png grid: 20x32, 3 cols x 4 rows).
+- **Test character authored (the gauntlet input):** chibi demo matching the
+  samples' proportions — .progress/pieces/samples4/make_chibi.py (cyan hair,
+  coral shirt, grey pants, 3-tone ramps, selout outlines, 8 layers: hair/
+  head/face/torso/arm_left/arm_right/leg_left/leg_right — the custom-input
+  contract). Imports at 16x32, zero-blocking.
+- **4-direction builder:** .progress/pieces/samples4/make_ours.py — imports
+  the chibi, projects south/west/east/north, 3-frame walk (frames 0/2/4 of
+  the 8-cycle), packs rows in the samples' order (down/left/right/up).
+  First output: clean front/profile/back per vision, torso proportionate.
+- **Gauntlet loop:** round-1 fresh critic (mimo-v2.5-pro, vision) judging
+  ours_walk_4dir.png vs s000_ref.png (blind A/B via /tmp/pf_tools/
+  compare_ab4.py). On FAIL: one builder at the biggest gap, re-criticize.
+- **Note on "torso missing":** the ROBOT's giant head (18/31 rows) leaves a
+  tiny dark torso — an art-proportion issue; the chibi test character has
+  balanced proportions so the gauntlet isolates engine quality.
+
 ## Plan (from HANDOFF.md priority order)
 
 | # | Piece | Builder owns (files) | Status | Critic verdict |
