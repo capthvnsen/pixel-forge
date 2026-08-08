@@ -25,10 +25,12 @@ SKIN_LO = (178, 132, 96, 255)
 SKIN_EDGE = (120, 84, 56, 255)  # selout around skin
 HAIR_HI = (66, 187, 214, 255)  # bright cyan
 HAIR_MID = (42, 143, 168, 255)
+HAIR_MID2 = (34, 116, 142, 255)  # 4-tone ramp: extra step for gradient depth
 HAIR_LO = (28, 96, 122, 255)
 HAIR_EDGE = (14, 44, 61, 255)  # dark navy selout for hair
 SHIRT_HI = (228, 96, 104, 255)  # coral (warm highlight)
 SHIRT_MID = (196, 62, 72, 255)
+SHIRT_MID2 = (166, 46, 60, 255)  # 4-tone ramp
 SHIRT_LO = (132, 28, 48, 255)  # cool maroon shadow (hue shift, sample style)
 SHIRT_EDGE = (84, 16, 30, 255)  # dark maroon selout
 GOLD = (232, 186, 96, 255)  # jacket buttons
@@ -42,6 +44,7 @@ GOLD_EDGE = (150, 108, 44, 255)
 # near/far darkening fires.
 PANTS_HI = (178, 146, 130, 255)  # light warm tan (near leg pops)
 PANTS_MID = (140, 108, 92, 255)
+PANTS_MID2 = (118, 88, 74, 255)  # 4-tone ramp
 PANTS_LO = (92, 64, 52, 255)  # deep warm shadow (far leg)
 PANTS_EDGE = (48, 32, 26, 255)
 SHOE = (58, 52, 62, 255)
@@ -99,13 +102,21 @@ def draw_layers(style: str = "haired") -> dict[str, Image.Image]:
     if style == "bald":
         return draw_bald(layers)
 
-    # ============ HAIR (rows 0-5 dome, rows 4-12 curtains, dithered) ============
+    # ============ HAIR (rows 0-5 dome, rows 4-12 curtains, 4-tone) ============
     hair = layers["hair"]
     _rect(hair, 5, 0, 14, 0, HAIR_HI)  # crown highlight
     _rect(hair, 4, 1, 15, 2, HAIR_MID)  # dome mid
-    _rect(hair, 4, 3, 15, 5, HAIR_LO)  # dome lower
+    _rect(hair, 4, 3, 15, 4, HAIR_MID2)  # dome lower-mid (4th tone)
+    _rect(hair, 4, 5, 15, 5, HAIR_LO)  # dome lower
     _rect(hair, 3, 4, 4, 12, HAIR_LO)  # left curtain
     _rect(hair, 15, 4, 16, 12, HAIR_LO)  # right curtain
+    # round the dome top corners (2px arc — the "flat-topped hat" read)
+    _px(hair, 4, 1, (0, 0, 0, 0))
+    _px(hair, 15, 1, (0, 0, 0, 0))
+    _px(hair, 3, 1, (0, 0, 0, 0))
+    _px(hair, 16, 1, (0, 0, 0, 0))
+    _px(hair, 3, 2, (0, 0, 0, 0))
+    _px(hair, 16, 2, (0, 0, 0, 0))
     # dither the curtains (clean 2px clusters, not 1x1 noise)
     _rect(hair, 3, 6, 4, 7, HAIR_MID)
     _rect(hair, 15, 6, 16, 7, HAIR_MID)
@@ -158,11 +169,13 @@ def draw_layers(style: str = "haired") -> dict[str, Image.Image]:
 
 def _draw_body(layers: dict[str, Image.Image]) -> None:
     """Torso + arms + legs — shared by both styles."""
-    # ============ TORSO (rows 14-20, jacket with placket + buttons) ============
+    # ============ TORSO (rows 14-20, jacket with placket + buttons, 4-tone) ============
     torso = layers["torso"]
     _outline_rect(torso, 3, 14, 16, 20, SHIRT_MID, border=SHIRT_EDGE)
     _rect(torso, 4, 14, 6, 16, SHIRT_HI)  # top-left light on shoulder
+    _rect(torso, 7, 14, 16, 15, SHIRT_MID2)  # right-shoulder mid shadow (4th tone)
     _rect(torso, 3, 19, 16, 20, SHIRT_LO)  # lower shadow
+    _rect(torso, 3, 18, 16, 18, SHIRT_MID2)  # hem mid shadow (4th tone)
     _rect(torso, 9, 14, 10, 20, SHIRT_LO)  # centre placket shadow
     _px(torso, 9, 16, GOLD)  # buttons
     _px(torso, 9, 19, GOLD)
@@ -182,20 +195,23 @@ def _draw_body(layers: dict[str, Image.Image]) -> None:
         _px(arm, x, 22, SKIN_EDGE)
         _px(arm, x + 2, 22, SKIN_EDGE)
 
-    # ============ LEGS (4px wide, WIDE stance, COMPACT — rows 21-30) ============
+    # ============ LEGS (4px wide, WIDE stance, COMPACT — rows 21-31) ============
     for side, x in (("leg_left", 4), ("leg_right", 13)):
         leg = layers[side]
         _rect(leg, x + 1, 21, x + 2, 25, PANTS_MID)  # 2px fill (5px pants — chibi short legs)
         _rect(leg, x + 1, 21, x + 2, 21, PANTS_HI)  # thigh light — 2px wide so the tone
         _px(leg, x + 1, 25, PANTS_HI)  # survives the import's palette dedup
-        _rect(leg, x + 1, 26, x + 2, 26, PANTS_LO)  # knee shadow
-        _rect(leg, x + 1, 27, x + 2, 30, SHOE)  # shoe (4px tall — grounded)
-        _px(leg, x + 1, 27, SHOE_HI)
-        for y in range(21, 31):  # selout pants + shoe
-            _px(leg, x, y, PANTS_EDGE if y < 27 else SHOE_EDGE)
-            _px(leg, x + 3, y, PANTS_EDGE if y < 27 else SHOE_EDGE)
-        _px(leg, x, 30, SHOE_EDGE)
-        _px(leg, x + 3, 30, SHOE_EDGE)
+        _rect(leg, x + 1, 26, x + 2, 26, PANTS_MID2)  # knee mid shadow (4th tone)
+        _rect(leg, x + 1, 27, x + 2, 28, PANTS_LO)  # shin shadow
+        _rect(leg, x + 1, 29, x + 2, 31, SHOE)  # chunky shoe (3px tall, grounded)
+        _px(leg, x + 1, 29, SHOE_HI)
+        _px(leg, x + 2, 29, SHOE_HI)
+        _px(leg, x + 1, 30, SHOE_HI)  # sole highlight
+        for y in range(21, 32):  # selout pants + shoe
+            _px(leg, x, y, PANTS_EDGE if y < 29 else SHOE_EDGE)
+            _px(leg, x + 3, y, PANTS_EDGE if y < 29 else SHOE_EDGE)
+        _px(leg, x, 31, SHOE_EDGE)
+        _px(leg, x + 3, 31, SHOE_EDGE)
         _px(leg, x + 1, 21, PANTS_EDGE)
 
 
