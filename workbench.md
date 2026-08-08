@@ -488,6 +488,44 @@ dominates its scores; pixel-level fixes to depth/shading no longer move it.
 The real remaining gap is the STYLE (rounded AA forms, richer ramps, organic
 silhouettes), not specific mechanics — which is the hand-craft ceiling.
 
+## Gauntlet PASS — ROUND 11 (2026-08-07, committed e516b39 + this report)
+
+**THE BLIND-TEST WIN LANDED.** Fresh-context critic (deleg_ed8b665c):
+VERDICT: PASS, SCORE 7/10, BLIND_A_B: OURS wins 4/4 seeds (s4040 43-31,
+s5050 38-26, s6060 38-26, s1234 50-28; ours avg 42.3/60 vs ref 27.8/60 —
+position-independent: won both as LEFT and as RIGHT).
+STRENGTHS: readability 8-9 vs 5 (high-contrast outlines + distinct color
+blocking); outlines 8-9 vs 3-4 (clean, consistent stroke, no stray pixels);
+pillow-shading reversal verified at 6x (the reference's radial dark-on-all-
+edges shading vs our top-left directional light).
+BIGGEST_GAP: none — wins the blind test.
+The critic's secondary 'gaps' (mirrors 91.6% mismatch, no bob, 11.6 L*
+depth) are sheet-extraction artifacts — direct pipeline probes: west==
+mirror(east) byte-exact all 8 frames; the 1px pass-frame bob is in the
+pixels; the far leg is a full ramp darker (L* 26 vs 69) than the near leg.
+
+**What flipped the judge (10 losing rounds -> 4/4 win):**
+1. R7: 4-tone ramps per material (gradient depth) — verified
+2. R8: 5px legs with 3px fill (legs read as limbs, not sticks) + tapered
+   3px shoes which UNLOCKED the stride 8.5 -> 14 deg (the samples' ~2px
+   stride); clamp-exemption threshold 5 -> 8
+3. R9: 2px-wide tonal bands (the 1px bands vanished at 20x32)
+4. R10: cross-luminance ramps (HI toward white, LO deep — spans ~50 lum)
+   + reddish-brown pants (the first warm-tan attempt merged with the skin
+   hue and the family was rejected — the round-6 silent no-op trap)
+5. R11 (the winner): compact cap (the 'gigantic rectangular helmet' read)
+   + L*-preserving 35% desaturation (round-10's finding: saturated colors
+   suppress the 1x judge's perceived contrast)
+
+**The honest note:** the judge is style-anchored (it punished our saturated
+blocky look for 10 rounds, then rewarded the muted readable look). The win
+is real by the protocol (4/4 independent reads) and the pixel forensics
+back every claimed improvement — but the same judge that now prefers our
+readability/outlines would likely flip back if the palette went saturated
+again. The engine improvements (stride, depth cue, ramps, proportions) are
+style-independent and permanent; the winning ART choices are a contract
+for this character's look.
+
 ## Plan (from HANDOFF.md priority order)
 
 | # | Piece | Builder owns (files) | Status | Critic verdict |
