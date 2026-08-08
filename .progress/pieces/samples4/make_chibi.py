@@ -172,11 +172,12 @@ def _draw_body(layers: dict[str, Image.Image]) -> None:
     # ============ TORSO (rows 14-20, jacket with placket + buttons, 4-tone) ============
     torso = layers["torso"]
     _outline_rect(torso, 3, 14, 16, 20, SHIRT_MID, border=SHIRT_EDGE)
-    _rect(torso, 4, 14, 6, 16, SHIRT_HI)  # top-left light on shoulder
+    _rect(torso, 4, 14, 6, 17, SHIRT_HI)  # top-left light on shoulder (2px tall band)
     _rect(torso, 7, 14, 16, 15, SHIRT_MID2)  # right-shoulder mid shadow (4th tone)
-    _rect(torso, 3, 19, 16, 20, SHIRT_LO)  # lower shadow
+    _rect(torso, 3, 19, 16, 20, SHIRT_LO)  # lower shadow (2px tall)
     _rect(torso, 3, 18, 16, 18, SHIRT_MID2)  # hem mid shadow (4th tone)
     _rect(torso, 9, 14, 10, 20, SHIRT_LO)  # centre placket shadow
+    _rect(torso, 4, 19, 8, 20, SHIRT_MID2)  # hem left-mid (gradient band)
     _px(torso, 9, 16, GOLD)  # buttons
     _px(torso, 9, 19, GOLD)
     _px(torso, 8, 15, SHIRT_HI)  # placket edge light
@@ -199,10 +200,9 @@ def _draw_body(layers: dict[str, Image.Image]) -> None:
     for side, x in (("leg_left", 3), ("leg_right", 13)):
         leg = layers[side]
         _rect(leg, x + 1, 21, x + 3, 25, PANTS_MID)  # 3px fill (the round-7 critic:
-        _rect(leg, x + 1, 21, x + 3, 21, PANTS_HI)  # 2px fill reads as sticks at native res)
-        _px(leg, x + 1, 25, PANTS_HI)
-        _rect(leg, x + 1, 26, x + 3, 26, PANTS_MID2)  # knee mid shadow (4th tone)
-        _rect(leg, x + 1, 27, x + 3, 28, PANTS_LO)  # shin shadow
+        _rect(leg, x + 1, 21, x + 3, 22, PANTS_HI)  # 2px fill reads as sticks at native res)
+        _rect(leg, x + 1, 25, x + 3, 26, PANTS_MID2)  # knee mid shadow (2px band, 4th tone)
+        _rect(leg, x + 1, 27, x + 3, 28, PANTS_LO)  # shin shadow (2px band)
         _rect(leg, x + 1, 29, x + 3, 31, SHOE)  # shoe — TAPERED to 3px so the
         _px(leg, x + 1, 29, SHOE_HI)  # boot-width clamp reads 3px and
         _px(leg, x + 3, 29, SHOE_HI)  # the stride stays wide
