@@ -374,9 +374,12 @@ def test_walk_clamp_arms_stay_inside_canvas_demo_geometry() -> None:
 
 
 def test_walk_clamp_stays_silent_on_thick_legs() -> None:
-    """Same long, gap-narrow geometry but >= 5px-wide legs: thick limbs read
-    as solid masses and keep the full requested swing (no clamp)."""
-    doc = _make_doc(leg_rows=["ooLoo"] * 15)
+    """Same long, gap-narrow geometry but >= 8px-wide legs: thick limbs read
+    as solid masses and keep the full requested swing (no clamp). The
+    exemption threshold was raised 5 -> 8 (round-8 gauntlet): the chibi's 5px
+    legs (3px fill) MUST still be clamped — their boots can fuse at a 9px hip
+    gap — while 8px+ masses can't cross readably."""
+    doc = _make_doc(leg_rows=["oooLoooo"] * 15)
     frames = generate_joint_walk_cycle(doc, {})
     assert max(abs(_rot(f, "leg_left").angle_deg) for f in frames) == 35.0
 

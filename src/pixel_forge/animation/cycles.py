@@ -304,7 +304,12 @@ _LIMB_CLEARANCE_PX = 1.0  # keep the scissor tips >= 1px short of the midline
 # stride. 2° keeps a minimum readable articulation while letting the geometry
 # clamp rule whenever it demands less than the old floor.
 _LIMB_SAFE_SWING_FLOOR_DEG = 2.0
-_LIMB_THICKNESS_EXEMPT_PX = 5  # limbs >= 5px wide read as solid masses
+# limbs >= this many px wide read as solid masses and skip the scissor clamp.
+# 8 (not 5): the round-7 gauntlet chibi's legs are 5px wide (3px fill + 2px
+# selout) — the wider fill is what makes the profile legs read as limbs
+# instead of sticks — and a 5px leg MUST still be clamped (its 5px boots can
+# fuse at a 9px hip gap). Only truly massive limbs (8px+) can't cross-readably.
+_LIMB_THICKNESS_EXEMPT_PX = 8
 _BITMAP_TRANSPARENT = (".", " ")
 
 

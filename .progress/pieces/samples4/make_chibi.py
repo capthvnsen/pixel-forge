@@ -195,23 +195,25 @@ def _draw_body(layers: dict[str, Image.Image]) -> None:
         _px(arm, x, 22, SKIN_EDGE)
         _px(arm, x + 2, 22, SKIN_EDGE)
 
-    # ============ LEGS (4px wide, WIDE stance, COMPACT — rows 21-31) ============
-    for side, x in (("leg_left", 4), ("leg_right", 13)):
+    # ============ LEGS (5px wide — 3px fill — rows 21-31, TAPERED shoes) ============
+    for side, x in (("leg_left", 3), ("leg_right", 13)):
         leg = layers[side]
-        _rect(leg, x + 1, 21, x + 2, 25, PANTS_MID)  # 2px fill (5px pants — chibi short legs)
-        _rect(leg, x + 1, 21, x + 2, 21, PANTS_HI)  # thigh light — 2px wide so the tone
-        _px(leg, x + 1, 25, PANTS_HI)  # survives the import's palette dedup
-        _rect(leg, x + 1, 26, x + 2, 26, PANTS_MID2)  # knee mid shadow (4th tone)
-        _rect(leg, x + 1, 27, x + 2, 28, PANTS_LO)  # shin shadow
-        _rect(leg, x + 1, 29, x + 2, 31, SHOE)  # chunky shoe (3px tall, grounded)
-        _px(leg, x + 1, 29, SHOE_HI)
-        _px(leg, x + 2, 29, SHOE_HI)
-        _px(leg, x + 1, 30, SHOE_HI)  # sole highlight
-        for y in range(21, 32):  # selout pants + shoe
-            _px(leg, x, y, PANTS_EDGE if y < 29 else SHOE_EDGE)
-            _px(leg, x + 3, y, PANTS_EDGE if y < 29 else SHOE_EDGE)
-        _px(leg, x, 31, SHOE_EDGE)
-        _px(leg, x + 3, 31, SHOE_EDGE)
+        _rect(leg, x + 1, 21, x + 3, 25, PANTS_MID)  # 3px fill (the round-7 critic:
+        _rect(leg, x + 1, 21, x + 3, 21, PANTS_HI)  # 2px fill reads as sticks at native res)
+        _px(leg, x + 1, 25, PANTS_HI)
+        _rect(leg, x + 1, 26, x + 3, 26, PANTS_MID2)  # knee mid shadow (4th tone)
+        _rect(leg, x + 1, 27, x + 3, 28, PANTS_LO)  # shin shadow
+        _rect(leg, x + 1, 29, x + 3, 31, SHOE)  # shoe — TAPERED to 3px so the
+        _px(leg, x + 1, 29, SHOE_HI)  # boot-width clamp reads 3px and
+        _px(leg, x + 3, 29, SHOE_HI)  # the stride stays wide
+        _px(leg, x + 2, 30, SHOE_HI)  # sole highlight
+        for y in range(21, 29):  # selout the pants (5px: x..x+4)
+            _px(leg, x, y, PANTS_EDGE)
+            _px(leg, x + 4, y, PANTS_EDGE)
+        for y in range(29, 32):  # selout the tapered shoe (3px: x+1..x+3)
+            _px(leg, x + 1, y, SHOE_EDGE)
+            _px(leg, x + 3, y, SHOE_EDGE)
+        _px(leg, x + 2, 31, SHOE_EDGE)
         _px(leg, x + 1, 21, PANTS_EDGE)
 
 
